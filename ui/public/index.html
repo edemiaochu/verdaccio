@@ -60,6 +60,8 @@
   .pill.offline .dot { background: var(--danger); }
   a.pill { text-decoration: none; cursor: pointer; transition: border-color .15s; }
   a.pill:hover { border-color: var(--blue); color: var(--text); }
+  button.pill { font: inherit; cursor: pointer; transition: border-color .15s, color .15s; }
+  .quit-btn:hover { border-color: rgba(248, 81, 73, .6); color: #ff8b84; }
 
   /* ---------- 分组与卡片 ---------- */
   .group { margin-bottom: 26px; }
@@ -296,6 +298,7 @@
     <div class="header-right">
       <a class="pill" href="http://localhost:4873" target="_blank">打开 Verdaccio ↗</a>
       <span id="statusPill" class="pill offline"><span class="dot"></span><span id="statusText">检查中…</span></span>
+      <button id="quitBtn" class="pill quit-btn" title="关闭本控制台服务(不影响 Verdaccio)">✕ 退出</button>
     </div>
   </header>
 
@@ -963,6 +966,27 @@ function renderRemote() {
 }
 
 $('#remoteClose').addEventListener('click', closeRemote);
+
+// ---------------------------------------------------------------------------
+// 退出控制台(服务以隐藏窗口运行时从这里关闭)
+// ---------------------------------------------------------------------------
+$('#quitBtn').addEventListener('click', async () => {
+  if (!confirm('确定关闭 Verdaccio 工具箱服务?\n(Verdaccio 私服本身不受影响)')) return;
+  try {
+    await fetch('/api/shutdown', {
+      method: 'POST',
+      headers: { 'x-toolbox': '1' },
+    });
+    document.body.innerHTML =
+      '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;' +
+      'background:#0c1117;color:#8fa0b5;font-family:Segoe UI,Microsoft YaHei,sans-serif;' +
+      'font-size:15px;text-align:center;line-height:2">' +
+      '<div>工具箱服务已退出<br>' +
+      '<span style="font-size:13px">重新双击 <b style="color:#dbe4ee">run-ui.vbs</b> 可再次启动</span></div></div>';
+  } catch (e) {
+    alert('退出失败: ' + e.message);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // 其他按钮

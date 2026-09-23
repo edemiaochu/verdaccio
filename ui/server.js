@@ -401,8 +401,8 @@ function startListen(attempt) {
     }
   });
 
-  // 重试前清掉上一次注册的监听,避免重复触发
-  server.removeAllListeners('listening');
+  // 注意:这里不能 removeAllListeners('listening') ——
+  // 会把全局的横幅/开浏览器处理器一起清掉,导致端口接管后什么都不发生
   server.listen(PORT, '127.0.0.1');
 }
 
