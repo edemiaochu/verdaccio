@@ -1,0 +1,988 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verdaccio 工具箱</title>
+<style>
+  :root {
+    --bg: #0c1117;
+    --panel: #121a24;
+    --card: #16202c;
+    --card-hover: #1b2836;
+    --border: #243244;
+    --border-soft: #1d2937;
+    --text: #dbe4ee;
+    --muted: #8fa0b5;
+    --accent: #3fb950;
+    --blue: #4493f8;
+    --danger: #f85149;
+    --warn: #d29922;
+    --mono: "Cascadia Code", Consolas, "Courier New", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 24px 20px 60px; }
+
+  /* ---------- 头部 ---------- */
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 26px;
+  }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .logo {
+    width: 44px; height: 44px; border-radius: 10px;
+    background: linear-gradient(135deg, #2f81f7, #1a4f8a);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 22px; color: #fff;
+    box-shadow: 0 4px 14px rgba(47, 129, 247, .35);
+  }
+  .brand h1 { font-size: 19px; font-weight: 600; letter-spacing: .3px; }
+  .brand p { color: var(--muted); font-size: 12.5px; font-family: var(--mono); }
+  .header-right { display: flex; align-items: center; gap: 10px; }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 14px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--panel);
+    font-size: 13px; color: var(--muted); white-space: nowrap;
+  }
+  .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #6e7f91; }
+  .pill.online { color: #57d68f; border-color: rgba(63, 185, 80, .4); }
+  .pill.online .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .pill.offline .dot { background: var(--danger); }
+  a.pill { text-decoration: none; cursor: pointer; transition: border-color .15s; }
+  a.pill:hover { border-color: var(--blue); color: var(--text); }
+
+  /* ---------- 分组与卡片 ---------- */
+  .group { margin-bottom: 26px; }
+  .group-head {
+    display: flex; align-items: baseline; gap: 12px;
+    margin-bottom: 12px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .group-head h2 { font-size: 15px; font-weight: 600; }
+  .group-head .sub { color: var(--muted); font-size: 12.5px; }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px;
+  }
+  .card {
+    text-align: left; cursor: pointer;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+    color: var(--text); font: inherit;
+    display: flex; gap: 12px; align-items: flex-start;
+    transition: background .15s, border-color .15s, transform .1s;
+  }
+  .card:hover:not(.disabled) { background: var(--card-hover); border-color: #33475e; }
+  .card:active:not(.disabled) { transform: scale(.985); }
+  .card.disabled { opacity: .45; cursor: not-allowed; }
+  .card .icon { font-size: 19px; line-height: 1.3; flex: none; }
+  .card .name { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+  .card .desc { color: var(--muted); font-size: 12.5px; }
+  .card.danger { border-color: rgba(248, 81, 73, .35); }
+  .card.danger:hover:not(.disabled) { border-color: rgba(248, 81, 73, .7); background: #231a1c; }
+  .card.danger .name { color: #ff8b84; }
+
+  /* ---------- 终端日志 ---------- */
+  .terminal {
+    position: sticky; bottom: 0; z-index: 5;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px 12px 0 0; margin-top: 10px;
+    box-shadow: 0 -8px 30px rgba(0, 0, 0, .45);
+  }
+  .term-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; border-bottom: 1px solid var(--border-soft);
+  }
+  .term-head .title { font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: 1px; }
+  .term-head .btns { display: flex; gap: 8px; }
+
+  .btn {
+    font: inherit; font-size: 12.5px; cursor: pointer;
+    padding: 5px 14px; border-radius: 7px;
+    border: 1px solid var(--border); background: var(--card); color: var(--text);
+    transition: border-color .15s, background .15s;
+  }
+  .btn:hover { border-color: #3d5268; }
+  .btn.kill { border-color: rgba(248, 81, 73, .5); color: #ff8b84; }
+  .btn.kill:hover { background: rgba(248, 81, 73, .12); }
+  .hidden { display: none !important; }
+
+  .logs {
+    height: 300px; overflow-y: auto; padding: 10px 14px;
+    background: #0a0e14; border-radius: 0 0 0 0;
+    font-family: var(--mono); font-size: 12.5px;
+  }
+  .logs .empty { color: #5a6a7d; padding: 8px 4px; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+  .log { margin-bottom: 14px; }
+  .log-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 5px 8px; background: #101722; border-radius: 6px;
+    margin-bottom: 4px; font-size: 12px; color: var(--muted);
+  }
+  .log-head .cmd { color: #79c0ff; font-weight: 600; }
+  .log-head .time { color: #5a6a7d; }
+  .log-head .spacer { flex: 1; }
+  .badge { font-size: 11.5px; padding: 1px 10px; border-radius: 999px; border: 1px solid; }
+  .badge.running { color: #e3b341; border-color: rgba(227, 179, 65, .5); animation: pulse 1.2s infinite; }
+  .badge.ok { color: #57d68f; border-color: rgba(63, 185, 80, .4); }
+  .badge.fail { color: #ff8b84; border-color: rgba(248, 81, 73, .5); }
+  @keyframes pulse { 50% { opacity: .45; } }
+  .log pre {
+    white-space: pre-wrap; word-break: break-all;
+    padding: 4px 8px; color: #b9c7d6;
+  }
+  .log pre .err-line { color: #ff7b72; }
+
+  /* ---------- 弹窗 ---------- */
+  .overlay {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(5, 9, 14, .72); backdrop-filter: blur(3px);
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .modal {
+    width: 100%; max-width: 460px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 22px 24px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, .6);
+  }
+  .modal h3 { font-size: 16px; margin-bottom: 6px; }
+  .modal .desc { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .modal .warn-box {
+    background: rgba(248, 81, 73, .08); border: 1px solid rgba(248, 81, 73, .35);
+    color: #ffb3ad; border-radius: 8px; padding: 10px 12px;
+    font-size: 12.5px; margin-bottom: 14px; white-space: pre-line;
+  }
+  .field { margin-bottom: 13px; }
+  .field label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 5px; }
+  .field input, .field select {
+    width: 100%; font: inherit; font-size: 13.5px;
+    padding: 9px 12px; border-radius: 8px;
+    background: #0d141d; border: 1px solid var(--border); color: var(--text);
+    outline: none; transition: border-color .15s;
+    font-family: var(--mono);
+  }
+  .field input:focus, .field select:focus { border-color: var(--blue); }
+  .field input:invalid { border-color: rgba(248, 81, 73, .6); }
+  .modal-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+  .btn-primary {
+    font: inherit; font-size: 13.5px; cursor: pointer;
+    padding: 9px 22px; border-radius: 8px; border: none;
+    background: var(--blue); color: #fff; font-weight: 600;
+    transition: filter .15s;
+  }
+  .btn-primary:hover { filter: brightness(1.15); }
+  .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-primary.danger { background: var(--danger); }
+  .btn-ghost {
+    font: inherit; font-size: 13.5px; cursor: pointer;
+    padding: 9px 18px; border-radius: 8px;
+    background: none; border: 1px solid var(--border); color: var(--muted);
+  }
+  .btn-ghost:hover { color: var(--text); border-color: #3d5268; }
+  .hint { font-size: 12px; color: #5a6a7d; margin-top: 4px; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+
+  /* ---------- 包浏览器 / scope 预览 ---------- */
+  .modal.wide { max-width: 900px; }
+  .browser-controls { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .browser-controls input { flex: 1; min-width: 200px; }
+  .browser-controls select { width: auto; flex: none; }
+  .browser-list {
+    max-height: 56vh; overflow-y: auto;
+    border: 1px solid var(--border-soft); border-radius: 8px;
+  }
+  table.pkgs { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.pkgs th {
+    text-align: left; padding: 8px 14px; position: sticky; top: 0; z-index: 1;
+    background: #101722; color: var(--muted); font-weight: 600;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  table.pkgs td { padding: 7px 14px; border-bottom: 1px solid var(--border-soft); }
+  table.pkgs tr:hover td { background: #121b26; }
+  td.pkg-name { font-family: var(--mono); color: #79c0ff; word-break: break-all; }
+  td.pkg-ver { font-family: var(--mono); color: #57d68f; white-space: nowrap; }
+  td.pkg-time { color: var(--muted); white-space: nowrap; }
+  td.pkg-del { text-align: right; }
+  .mini-btn {
+    font: inherit; font-size: 12px; cursor: pointer;
+    padding: 3px 12px; border-radius: 6px;
+    border: 1px solid rgba(248, 81, 73, .45); background: none; color: #ff8b84;
+    transition: background .15s;
+  }
+  .mini-btn:hover { background: rgba(248, 81, 73, .12); }
+  .missing-badge {
+    font-size: 11px; color: var(--warn);
+    border: 1px solid rgba(210, 153, 34, .5); border-radius: 999px;
+    padding: 1px 8px; margin-left: 6px; white-space: nowrap;
+  }
+  .scope-preview {
+    max-height: 150px; overflow-y: auto;
+    border: 1px solid var(--border-soft); border-radius: 8px;
+    background: #0d141d; padding: 8px 12px;
+    font-family: var(--mono); font-size: 12px; color: #9fb0c3;
+    white-space: pre; margin-top: 4px;
+  }
+
+  /* ---------- 远程连接指引 ---------- */
+  .net-banner {
+    border-radius: 8px; padding: 10px 14px; font-size: 13px;
+    margin-bottom: 14px; border: 1px solid; line-height: 1.6;
+  }
+  .net-banner.ok { color: #57d68f; border-color: rgba(63, 185, 80, .4); background: rgba(63, 185, 80, .08); }
+  .net-banner.warn { color: #e3b341; border-color: rgba(227, 179, 65, .45); background: rgba(227, 179, 65, .07); }
+  .ip-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ip-chip {
+    font: inherit; cursor: pointer; text-align: left;
+    padding: 8px 14px; border-radius: 9px;
+    background: var(--card); border: 1px solid var(--border); color: var(--text);
+    font-family: var(--mono); font-size: 13.5px;
+    display: flex; flex-direction: column; gap: 2px;
+    transition: border-color .15s, background .15s;
+  }
+  .ip-chip:hover { border-color: #3d5268; }
+  .ip-chip.active { border-color: var(--blue); background: #14233a; }
+  .ip-chip .chip-sub {
+    font-size: 11px; color: var(--muted);
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  .ip-chip.dead .chip-sub { color: #e3b341; }
+  .snippet { margin-bottom: 12px; }
+  .snippet-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 4px; font-size: 12.5px; color: var(--muted);
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  .snippet pre {
+    background: #0d141d; border: 1px solid var(--border-soft); border-radius: 8px;
+    padding: 10px 14px; font-family: var(--mono); font-size: 12.5px;
+    color: #b9c7d6; white-space: pre-wrap; word-break: break-all; margin: 0;
+  }
+  .copy-btn {
+    font: inherit; font-size: 12px; cursor: pointer;
+    padding: 2px 12px; border-radius: 6px;
+    border: 1px solid var(--border); background: none; color: var(--muted);
+    transition: color .15s, border-color .15s;
+  }
+  .copy-btn:hover { color: var(--text); border-color: var(--blue); }
+  .net-section-title {
+    margin: 18px 0 10px; padding-top: 14px;
+    border-top: 1px dashed var(--border);
+    font-size: 13px; font-weight: 600; color: #e3b341;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="logo">V</div>
+      <div>
+        <h1>Verdaccio 工具箱</h1>
+        <p>localhost:4873 · 本地管理控制台</p>
+      </div>
+    </div>
+    <div class="header-right">
+      <a class="pill" href="http://localhost:4873" target="_blank">打开 Verdaccio ↗</a>
+      <span id="statusPill" class="pill offline"><span class="dot"></span><span id="statusText">检查中…</span></span>
+    </div>
+  </header>
+
+  <main id="groups"></main>
+
+  <section class="terminal">
+    <div class="term-head">
+      <span class="title">执 行 日 志</span>
+      <div class="btns">
+        <button id="killBtn" class="btn kill hidden">■ 终止当前命令</button>
+        <button id="clearBtn" class="btn">清空日志</button>
+      </div>
+    </div>
+    <div id="logs" class="logs">
+      <div class="empty" id="logsEmpty">尚无执行记录 — 点击上方卡片运行命令</div>
+    </div>
+  </section>
+</div>
+
+<!-- 远程连接指引弹窗 -->
+<div id="remoteOverlay" class="overlay hidden">
+  <div class="modal wide">
+    <h3>🌐 其他电脑接入本机 Verdaccio</h3>
+    <div id="remoteBanner"></div>
+    <div class="field">
+      <label>本机局域网 IP(点击选择)</label>
+      <div id="ipChips" class="ip-chips"></div>
+    </div>
+    <div id="remoteSnippets"></div>
+    <div class="modal-btns">
+      <button class="btn-ghost" id="remoteClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 包浏览器弹窗 -->
+<div id="browserOverlay" class="overlay hidden">
+  <div class="modal wide">
+    <h3>📦 包列表 <span id="browserCount" class="hint"></span></h3>
+    <div class="browser-controls">
+      <input id="browserSearch" placeholder="搜索包名…" autocomplete="off" spellcheck="false">
+      <select id="browserScope"></select>
+      <button class="btn" id="browserRefresh">刷新</button>
+    </div>
+    <div class="browser-list">
+      <table class="pkgs">
+        <thead><tr><th>包名</th><th>版本</th><th>更新时间</th><th></th></tr></thead>
+        <tbody id="browserBody"></tbody>
+      </table>
+    </div>
+    <div class="modal-btns">
+      <button class="btn-ghost" id="browserClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 弹窗 -->
+<div id="overlay" class="overlay hidden">
+  <div class="modal">
+    <h3 id="modalTitle"></h3>
+    <div class="desc" id="modalDesc"></div>
+    <div class="warn-box hidden" id="modalWarn"></div>
+    <div id="modalFields"></div>
+    <div class="modal-btns">
+      <button class="btn-ghost" id="modalCancel">取消</button>
+      <button class="btn-primary" id="modalRun">运行</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ---------------------------------------------------------------------------
+// 命令定义
+// ---------------------------------------------------------------------------
+const COMMANDS = [
+  {
+    group: '服务控制',
+    items: [
+      { id: 'start-background', icon: '🚀', name: '后台启动', desc: '隐藏窗口启动 Verdaccio,日志写入 D:\\verdaccio\\logs', config: true },
+      { id: 'start',            icon: '🖥️', name: '前台启动', desc: '前台运行,持续占用本控制台(可随时终止)', warn: '命令会一直运行不会自动结束,\n点击「终止当前命令」可停止。', config: true },
+      { id: 'stop',             icon: '⏹️', name: '停止服务', desc: '结束占用 4873 端口的 Verdaccio 进程', warn: '将强制结束 Verdaccio 进程,\n正在进行的发布/安装会中断。' },
+      { id: 'status',           icon: '📊', name: '运行状态', desc: '查看 Node 进程与 Registry ping 结果' },
+      { id: 'test',             icon: '✅', name: '连通性测试', desc: 'npm ping + 示例包 view 测试' },
+      { id: 'remote-access',    icon: '🌐', name: '远程连接', desc: '查看本机 IP,获取其他电脑接入本私服的配置', remote: true },
+    ],
+  },
+  {
+    group: '数据库维护',
+    items: [
+      { id: 'backup-db', icon: ' 💾', name: '备份数据库', desc: '复制 .verdaccio-db.json 到备份目录' },
+      { id: 'check-db',  icon: '🔍', name: '检查失效包', desc: '对比 DB 列表与磁盘,列出已丢失的包' },
+      { id: 'clean-db',  icon: '🧹', name: '清理失效记录', desc: '从 DB 中移除磁盘上已不存在的包(自动备份)', warn: '执行前会自动备份 DB,\n需要先停止 Verdaccio。' },
+    ],
+  },
+  {
+    group: '包管理',
+    sub: 'packages',
+    items: [
+      { id: 'browse-packages',    icon: '📦', name: '包列表', desc: '浏览全部包、版本与更新时间,可直接删除', browser: true },
+      { id: 'remove-package',     icon: '🗑️', name: '删除指定包', desc: '从存储与 DB 中删除单个包', danger: true, confirm: 'DELETE', param: 'package', warn: '将删除该包的全部版本与存储文件。\n执行前会自动备份 DB,需要先停止 Verdaccio。' },
+      { id: 'remove-scope',       icon: '🧨', name: '删除 Scope 全部包', desc: '删除同一 scope 下的所有包,如 @szewtwin', danger: true, confirm: 'DELETE', param: 'scope', warn: '将删除该 scope 下【所有包】的存储与 DB 记录。\nsecret 保留,执行前自动备份 DB。\n需要先停止 Verdaccio。' },
+      { id: 'remove-all-packages', icon: '💣', name: '删除全部包', desc: '清空所有包存储与 DB 列表(secret 保留)', danger: true, confirm: 'DELETE ALL', warn: '将删除 Verdaccio 上【所有包】的全部存储!\nsecret 会保留,执行前自动备份 DB。\n需要先停止 Verdaccio。' },
+    ],
+  },
+  {
+    group: '账户与安全',
+    items: [
+      { id: 'rotate-secret', icon: '🔑', name: '轮换 Secret', desc: '生成新 secret,所有已登录 token 全部失效', danger: true, confirm: 'ROTATE', warn: '轮换后所有已发布的认证 token 失效,\n所有人需要重新 npm login。\n执行前自动备份 DB,需要先停止 Verdaccio。' },
+      { id: 'login',         icon: '👤', name: 'npm 登录', desc: '向 localhost:4873 登录,更新 .npmrc token', login: true, warn: '需要 Verdaccio 正在运行。\n登录成功后 token 写入当前用户 .npmrc。' },
+    ],
+  },
+];
+
+const $ = (sel) => document.querySelector(sel);
+let running = false;
+let packageList = [];
+
+// ---------------------------------------------------------------------------
+// 渲染命令卡片
+// ---------------------------------------------------------------------------
+function render() {
+  const root = $('#groups');
+  root.innerHTML = '';
+  for (const g of COMMANDS) {
+    const sec = document.createElement('div');
+    sec.className = 'group';
+    const head = document.createElement('div');
+    head.className = 'group-head';
+    head.innerHTML = `<h2>${g.group}</h2><span class="sub" id="sub-${g.sub || ''}"></span>`;
+    sec.appendChild(head);
+
+    const cards = document.createElement('div');
+    cards.className = 'cards';
+    for (const c of g.items) {
+      const btn = document.createElement('button');
+      btn.className = 'card' + (c.danger ? ' danger' : '');
+      btn.dataset.cmd = c.id;
+      btn.innerHTML = `
+        <span class="icon">${c.icon}</span>
+        <span>
+          <div class="name">${c.name}</div>
+          <div class="desc">${c.desc}</div>
+        </span>`;
+      btn.addEventListener('click', () =>
+        c.browser ? openBrowser() : c.remote ? openRemote() : openModal(c));
+      cards.appendChild(btn);
+    }
+    sec.appendChild(cards);
+    root.appendChild(sec);
+  }
+}
+
+function setRunning(v) {
+  running = v;
+  document.querySelectorAll('.card').forEach((el) => el.classList.toggle('disabled', v));
+  $('#killBtn').classList.toggle('hidden', !v);
+}
+
+// ---------------------------------------------------------------------------
+// 状态 & 包列表
+// ---------------------------------------------------------------------------
+async function refreshStatus() {
+  const pill = $('#statusPill');
+  const text = $('#statusText');
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    pill.classList.toggle('online', d.online);
+    pill.classList.toggle('offline', !d.online);
+    text.textContent = d.online ? 'Verdaccio 在线' : 'Verdaccio 离线';
+  } catch {
+    text.textContent = '无法连接控制台服务';
+  }
+}
+
+async function refreshPackages() {
+  try {
+    const r = await fetch('/api/packages');
+    const d = await r.json();
+    packageList = d.packages || [];
+    const sub = $('#sub-packages');
+    if (sub) {
+      sub.textContent = d.error
+        ? '数据库读取失败'
+        : `数据库中共 ${d.count} 个包`;
+    }
+  } catch {}
+}
+
+// ---------------------------------------------------------------------------
+// 弹窗
+// ---------------------------------------------------------------------------
+let modalCtx = null; // 当前弹窗对应的命令
+
+const DEFAULT_CONFIG = 'C:\\Users\\lenovo\\.config\\verdaccio\\config.yaml';
+
+function field(label, attrs, hint) {
+  return `<div class="field">
+    <label>${label}</label>
+    <input ${attrs}>
+    ${hint ? `<div class="hint">${hint}</div>` : ''}
+  </div>`;
+}
+
+function escAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+// 从包列表统计 scope
+function getScopes() {
+  const map = new Map();
+  for (const p of packageList) {
+    const m = p.match(/^@[^/]+\//);
+    const s = m ? m[0].slice(0, -1) : '';
+    if (!s) continue;
+    map.set(s, (map.get(s) || 0) + 1);
+  }
+  return [...map.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+function updateScopePreview() {
+  const s = $('#f-scope') ? $('#f-scope').value : '';
+  const list = packageList.filter((p) => p.startsWith(s + '/'));
+  $('#scopePreview').textContent = list.length
+    ? list.join('\n')
+    : '(该 scope 下没有包)';
+}
+
+function openModal(cmd, preset = {}) {
+  if (running) return;
+  modalCtx = cmd;
+  $('#modalTitle').textContent = cmd.icon + '  ' + cmd.name;
+  $('#modalDesc').textContent = cmd.desc;
+
+  const warnBox = $('#modalWarn');
+  if (cmd.warn) {
+    warnBox.textContent = '⚠ ' + cmd.warn;
+    warnBox.classList.remove('hidden');
+  } else {
+    warnBox.classList.add('hidden');
+  }
+
+  let fields = '';
+  if (cmd.config) {
+    const saved = localStorage.getItem('verdaccio-config') || DEFAULT_CONFIG;
+    fields += field('config.yaml 路径', `
+      id="f-config" value="${escAttr(saved)}" autocomplete="off" spellcheck="false"`,
+      '自定义启动配置文件,输入会自动记住');
+  }
+  if (cmd.param === 'package') {
+    const options = packageList.map((p) => `<option value="${p}">`).join('');
+    fields += field('包名 Package', `
+      id="f-package" list="pkg-list" placeholder="例如 @szewec/bis-core-schema"
+      autocomplete="off" spellcheck="false"`,
+      packageList.length ? '可从下拉列表选择,共 ' + packageList.length + ' 个包' : '');
+    fields += `<datalist id="pkg-list">${options}</datalist>`;
+  }
+  if (cmd.param === 'scope') {
+    const scopes = getScopes();
+    fields += `<div class="field">
+      <label>Scope 范围</label>
+      <select id="f-scope">
+        ${scopes.map((s) => `<option value="${s.name}">${s.name}(${s.count} 个包)</option>`).join('')}
+      </select>
+      <div class="hint">将删除所选 scope 下的全部包</div>
+    </div>
+    <div class="field">
+      <label>将删除以下包:</label>
+      <div class="scope-preview" id="scopePreview"></div>
+    </div>`;
+  }
+  if (cmd.login) {
+    fields += field('用户名 Username', 'id="f-user" autocomplete="off" spellcheck="false"');
+    fields += field('密码 Password', 'id="f-pass" type="password" autocomplete="off"');
+    fields += field('邮箱 Email', 'id="f-email" autocomplete="off" spellcheck="false"');
+  }
+  if (cmd.confirm) {
+    fields += field(`输入 <b style="color:#ff8b84">${cmd.confirm}</b> 以确认执行`,
+      'id="f-confirm" placeholder="' + cmd.confirm + '" autocomplete="off" spellcheck="false"',
+      '与命令行二次确认一致,输入错误将取消操作');
+  }
+  $('#modalFields').innerHTML = fields;
+
+  const runBtn = $('#modalRun');
+  runBtn.classList.toggle('danger', !!cmd.danger);
+  runBtn.disabled = !!cmd.confirm; // 需要确认词时先禁用
+  runBtn.textContent = cmd.danger ? '确认执行' : '运行';
+
+  const confirmInput = $('#f-confirm');
+  if (confirmInput) {
+    confirmInput.addEventListener('input', () => {
+      runBtn.disabled = confirmInput.value.trim() !== cmd.confirm;
+    });
+  }
+
+  // 预填
+  if (preset.package && $('#f-package')) $('#f-package').value = preset.package;
+  if ($('#f-scope')) {
+    updateScopePreview();
+    $('#f-scope').addEventListener('change', updateScopePreview);
+  }
+
+  $('#overlay').classList.remove('hidden');
+  const first = $('#modalFields input');
+  if (first) first.focus();
+}
+
+function closeModal() {
+  $('#overlay').classList.add('hidden');
+  modalCtx = null;
+}
+
+$('#modalCancel').addEventListener('click', closeModal);
+$('#overlay').addEventListener('click', (e) => {
+  if (e.target === $('#overlay')) closeModal();
+});
+$('#browserOverlay').addEventListener('click', (e) => {
+  if (e.target === $('#browserOverlay')) closeBrowser();
+});
+$('#remoteOverlay').addEventListener('click', (e) => {
+  if (e.target === $('#remoteOverlay')) closeRemote();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!$('#overlay').classList.contains('hidden')) closeModal();
+  else if (!$('#browserOverlay').classList.contains('hidden')) closeBrowser();
+  else if (!$('#remoteOverlay').classList.contains('hidden')) closeRemote();
+});
+
+$('#modalRun').addEventListener('click', () => {
+  const cmd = modalCtx;
+  if (!cmd) return;
+
+  const payload = { id: cmd.id, args: [], stdin: '' };
+
+  if (cmd.config) {
+    const cfg = $('#f-config').value.trim();
+    if (cfg) {
+      payload.config = cfg;
+      localStorage.setItem('verdaccio-config', cfg);
+    }
+  }
+  if (cmd.param === 'package') {
+    const name = $('#f-package').value.trim();
+    if (!name) { $('#f-package').focus(); return; }
+    payload.package = name;
+  }
+  if (cmd.param === 'scope') {
+    payload.scope = $('#f-scope').value;
+  }
+  if (cmd.confirm) {
+    payload.stdin = $('#f-confirm').value.trim();
+  }
+  if (cmd.login) {
+    const user = $('#f-user').value;
+    const pass = $('#f-pass').value;
+    const email = $('#f-email').value;
+    if (!user || !pass) { $('#f-user').focus(); return; }
+    payload.stdin = [user, pass, email || 'nobody@localhost'].join('\n');
+  }
+
+  closeModal();
+  runCommand(cmd, payload);
+});
+
+// ---------------------------------------------------------------------------
+// 执行 & SSE 输出
+// ---------------------------------------------------------------------------
+function createLog(cmd) {
+  $('#logsEmpty')?.remove();
+  const now = new Date().toTimeString().slice(0, 8);
+  const log = document.createElement('div');
+  log.className = 'log';
+  log.innerHTML = `
+    <div class="log-head">
+      <span class="cmd">${cmd.id}</span>
+      <span class="time">${now}</span>
+      <span class="spacer"></span>
+      <span class="badge running">运行中</span>
+    </div>
+    <pre></pre>`;
+  const logs = $('#logs');
+  logs.appendChild(log);
+  logs.scrollTop = logs.scrollHeight;
+  return {
+    pre: log.querySelector('pre'),
+    badge: log.querySelector('.badge'),
+    append(text, isErr) {
+      if (isErr) {
+        const span = document.createElement('span');
+        span.className = 'err-line';
+        span.textContent = text;
+        this.pre.appendChild(span);
+      } else {
+        this.pre.appendChild(document.createTextNode(text));
+      }
+      logs.scrollTop = logs.scrollHeight;
+    },
+    finish(code) {
+      this.badge.classList.remove('running');
+      if (code === 0) {
+        this.badge.classList.add('ok');
+        this.badge.textContent = '✓ 完成 (exit 0)';
+      } else {
+        this.badge.classList.add('fail');
+        this.badge.textContent = '✗ 失败 (exit ' + code + ')';
+      }
+      logs.scrollTop = logs.scrollHeight;
+    },
+  };
+}
+
+async function runCommand(cmd, payload) {
+  setRunning(true);
+  const log = createLog(cmd);
+
+  try {
+    const res = await fetch('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok || !res.body) {
+      const e = await res.json().catch(() => ({}));
+      log.append('✖ ' + (e.error || 'HTTP ' + res.status) + '\n', true);
+      log.finish(1);
+      setRunning(false);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const line = frame.split('\n').find((l) => l.startsWith('data: '));
+        if (!line) continue;
+        handleEvent(JSON.parse(line.slice(6)), log);
+      }
+    }
+  } catch (e) {
+    log.append('✖ 连接中断: ' + e.message + '\n', true);
+    log.finish(1);
+    setRunning(false);
+  }
+}
+
+function handleEvent(ev, log) {
+  if (ev.type === 'out') log.append(ev.text, false);
+  else if (ev.type === 'err') log.append(ev.text, true);
+  else if (ev.type === 'exit') {
+    log.finish(ev.code === 'killed' ? 'killed' : ev.code);
+    setRunning(false);
+    refreshStatus();
+    refreshPackages();
+    // 包浏览器开着时同步刷新
+    if (!$('#browserOverlay').classList.contains('hidden')) loadBrowser();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 包浏览器
+// ---------------------------------------------------------------------------
+let browserData = [];
+
+function findCmd(id) {
+  for (const g of COMMANDS) {
+    const c = g.items.find((x) => x.id === id);
+    if (c) return c;
+  }
+  return null;
+}
+
+async function openBrowser() {
+  if (running) return;
+  $('#browserOverlay').classList.remove('hidden');
+  await loadBrowser();
+}
+
+function closeBrowser() {
+  $('#browserOverlay').classList.add('hidden');
+}
+
+async function loadBrowser() {
+  $('#browserBody').innerHTML =
+    '<tr><td colspan="4" style="color:#5a6a7d;padding:14px">加载中…</td></tr>';
+  try {
+    const r = await fetch('/api/packages?detail=1');
+    const d = await r.json();
+    browserData = (d.detail || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+    packageList = d.packages || browserData.map((x) => x.name);
+    refreshPackages(); // 同步分组副标题
+    renderBrowser();
+  } catch (e) {
+    $('#browserBody').innerHTML =
+      '<tr><td colspan="4" style="color:#ff8b84;padding:14px">加载失败: ' + e.message + '</td></tr>';
+  }
+}
+
+function renderBrowser() {
+  // scope 下拉(保留当前选择)
+  const sel = $('#browserScope');
+  const cur = sel.value;
+  const scopes = getScopes();
+  sel.innerHTML =
+    '<option value="">全部 scope</option>' +
+    scopes.map((s) => `<option value="${s.name}">${s.name} (${s.count})</option>`).join('');
+  sel.value = scopes.some((s) => s.name === cur) ? cur : '';
+
+  const q = $('#browserSearch').value.trim().toLowerCase();
+  const scope = sel.value;
+  const rows = browserData.filter((p) => {
+    if (q && !p.name.toLowerCase().includes(q)) return false;
+    if (scope && !p.name.startsWith(scope + '/')) return false;
+    return true;
+  });
+
+  $('#browserCount').textContent =
+    '共 ' + browserData.length + ' 个包 · 显示 ' + rows.length + ' 个';
+
+  $('#browserBody').innerHTML = rows.map((p) => `
+    <tr>
+      <td class="pkg-name">${p.name}${p.missing ? '<span class="missing-badge">存储缺失</span>' : ''}</td>
+      <td class="pkg-ver">${p.version || '-'}</td>
+      <td class="pkg-time">${p.modified ? new Date(p.modified).toLocaleString('zh-CN', { hour12: false }) : '-'}</td>
+      <td class="pkg-del"><button class="mini-btn" data-pkg="${p.name}">删除</button></td>
+    </tr>`).join('');
+
+  $('#browserBody').querySelectorAll('.mini-btn').forEach((b) => {
+    b.addEventListener('click', () => {
+      const cmd = findCmd('remove-package');
+      closeBrowser();
+      openModal(cmd, { package: b.dataset.pkg });
+    });
+  });
+}
+
+$('#browserSearch').addEventListener('input', renderBrowser);
+$('#browserScope').addEventListener('change', renderBrowser);
+$('#browserRefresh').addEventListener('click', loadBrowser);
+$('#browserClose').addEventListener('click', closeBrowser);
+
+// ---------------------------------------------------------------------------
+// 远程连接指引
+// ---------------------------------------------------------------------------
+let remoteData = null;
+let selectedIp = null;
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function snippet(title, code, note) {
+  return `<div class="snippet">
+    <div class="snippet-head"><span>${title}</span>
+      <button class="copy-btn" data-copy="${escAttr(code)}">复制</button></div>
+    <pre><code>${esc(code)}</code></pre>
+    ${note ? `<div class="hint">${note}</div>` : ''}
+  </div>`;
+}
+
+function bindCopyButtons(rootSel) {
+  document.querySelectorAll(rootSel + ' .copy-btn').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const text = b.dataset.copy;
+      let ok = false;
+      try {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        try { ok = document.execCommand('copy'); } catch {}
+        ta.remove();
+      }
+      const old = '复制';
+      b.textContent = ok ? '已复制 ✓' : '复制失败';
+      setTimeout(() => (b.textContent = old), 1500);
+    });
+  });
+}
+
+async function openRemote() {
+  $('#remoteOverlay').classList.remove('hidden');
+  $('#remoteBanner').innerHTML = '';
+  $('#ipChips').innerHTML = '<span class="hint">获取网络信息中…</span>';
+  $('#remoteSnippets').innerHTML = '';
+  try {
+    const r = await fetch('/api/network');
+    remoteData = await r.json();
+    const first = remoteData.ips.find((x) => x.reachable) || remoteData.ips[0];
+    selectedIp = first ? first.ip : null;
+    renderRemote();
+  } catch (e) {
+    $('#ipChips').innerHTML = '';
+    $('#remoteSnippets').innerHTML =
+      '<div class="net-banner warn">获取网络信息失败: ' + esc(e.message) + '</div>';
+  }
+}
+
+function closeRemote() {
+  $('#remoteOverlay').classList.add('hidden');
+}
+
+function renderRemote() {
+  const d = remoteData;
+  const anyOk = d.ips.some((x) => x.reachable);
+
+  $('#remoteBanner').innerHTML = anyOk
+    ? '<div class="net-banner ok">✅ Verdaccio 已监听局域网 — 其他电脑可使用下方地址连接(本机计算机名:' + esc(d.hostname) + ')</div>'
+    : '<div class="net-banner warn">⚠ Verdaccio 当前仅监听本机 localhost,局域网内其他电脑<strong>无法连接</strong> — 请先完成下方「开启局域网访问」两步操作</div>';
+
+  $('#ipChips').innerHTML = d.ips.length
+    ? d.ips.map((x) => `
+        <button class="ip-chip${x.ip === selectedIp ? ' active' : ''}${x.reachable ? '' : ' dead'}" data-ip="${x.ip}">
+          ${x.ip}
+          <span class="chip-sub">${x.ifname}${x.reachable ? ' · 可连接' : ' · 不可连接'}</span>
+        </button>`).join('')
+    : '<span class="hint">未检测到局域网 IPv4 地址(本机可能未连接网络)</span>';
+  $('#ipChips').querySelectorAll('.ip-chip').forEach((b) => {
+    b.addEventListener('click', () => {
+      selectedIp = b.dataset.ip;
+      renderRemote();
+    });
+  });
+
+  if (!selectedIp) {
+    $('#remoteSnippets').innerHTML =
+      '<div class="net-banner warn">没有可用的局域网 IP。请先连接 Wi-Fi / 网线,点击卡片重新打开本页面。</div>';
+    return;
+  }
+
+  const reg = 'http://' + selectedIp + ':' + d.port;
+  let html = '';
+  html += snippet('① 在目标电脑上设置 registry', 'npm config set registry ' + reg);
+  html += snippet('② 或写入目标电脑的 .npmrc', 'registry=' + reg,
+    '全局:C:\\Users\\&lt;用户名&gt;\\.npmrc(Windows)/ ~/.npmrc(Linux/macOS);放在项目根目录则仅该项目生效');
+  html += snippet('③ 登录(安装/发布私有包需要)', 'npm login --registry ' + reg + ' --auth-type=legacy');
+  html += snippet('④ 验证连接', 'npm ping --registry ' + reg,
+    '也可以直接用浏览器打开 ' + reg + ' 查看 Verdaccio 界面');
+
+  if (!anyOk) {
+    html += '<div class="net-section-title">⚙ 开启局域网访问(在本机操作一次)</div>';
+    html += snippet('第 1 步 · config.yaml 添加监听全部网卡', 'listen: 0.0.0.0:4873',
+      '文件:' + esc(d.config) + '。当前 listen:' + (d.listen ? esc(d.listen) : '未设置(默认仅 localhost)') + '。保存后需重启 Verdaccio');
+    html += snippet('第 2 步 · Windows 防火墙放行端口(管理员 PowerShell 执行)',
+      'netsh advfirewall firewall add rule name="Verdaccio" dir=in action=allow protocol=TCP localport=4873');
+  }
+  $('#remoteSnippets').innerHTML = html;
+  bindCopyButtons('#remoteSnippets');
+}
+
+$('#remoteClose').addEventListener('click', closeRemote);
+
+// ---------------------------------------------------------------------------
+// 其他按钮
+// ---------------------------------------------------------------------------
+$('#killBtn').addEventListener('click', async () => {
+  if (!confirm('确定终止当前正在执行的命令?')) return;
+  try { await fetch('/api/kill', { method: 'POST' }); } catch {}
+});
+
+$('#clearBtn').addEventListener('click', () => {
+  $('#logs').innerHTML = '<div class="empty" id="logsEmpty">尚无执行记录 — 点击上方卡片运行命令</div>';
+});
+
+// ---------------------------------------------------------------------------
+// 初始化
+// ---------------------------------------------------------------------------
+render();
+refreshStatus();
+refreshPackages();
+setInterval(refreshStatus, 8000);
+</script>
+</body>
+</html>

@@ -1,4 +1,8 @@
-$config = "C:\Users\lenovo\.config\verdaccio\config.yaml"
+﻿param(
+    [string]$Config = "C:\Users\lenovo\.config\verdaccio\config.yaml"
+)
+
+$config = $Config
 $logDir = "D:\verdaccio\logs"
 
 if (-not (Test-Path $logDir)) {

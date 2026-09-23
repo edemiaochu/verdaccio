@@ -1,4 +1,8 @@
-$config = "C:\Users\lenovo\.config\verdaccio\config.yaml"
+﻿param(
+    [string]$Config = "C:\Users\lenovo\.config\verdaccio\config.yaml"
+)
+
+$config = $Config
 
 Write-Host "========================================"
 Write-Host " Starting Verdaccio"

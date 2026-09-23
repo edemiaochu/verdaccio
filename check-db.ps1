@@ -1,4 +1,4 @@
-$storage = "C:\Users\lenovo\.config\verdaccio\storage"
+﻿$storage = "C:\Users\lenovo\.config\verdaccio\storage"
 $dbFile = Join-Path $storage ".verdaccio-db.json"
 
 if (-not (Test-Path $dbFile)) {

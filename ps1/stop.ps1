@@ -1,4 +1,4 @@
-Write-Host "========================================"
+﻿Write-Host "========================================"
 Write-Host " Stopping Verdaccio"
 Write-Host "========================================"
 
@@ -14,20 +14,24 @@ if ($null -eq $connections) {
 
 foreach ($connection in $connections) {
 
-    $pid = $connection.OwningProcess
+    # 注意:不能用 $pid,它是 PowerShell 只读自动变量(当前进程 PID)
+    $procId = $connection.OwningProcess
 
     Write-Host "Found process:"
-    Write-Host "PID: $pid"
+    Write-Host "PID: $procId"
 
-    $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+    $process = Get-Process -Id $procId -ErrorAction SilentlyContinue
 
     if ($null -ne $process) {
         Write-Host "Process: $($process.ProcessName)"
         Write-Host "Stopping..."
 
-        Stop-Process -Id $pid -Force
+        Stop-Process -Id $procId -Force
 
         Write-Host "Stopped."
+    }
+    else {
+        Write-Host "Process not found (may have already stopped)."
     }
 }
 

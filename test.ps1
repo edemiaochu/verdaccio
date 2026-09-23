@@ -1,4 +1,4 @@
-Write-Host "Testing Verdaccio..."
+﻿Write-Host "Testing Verdaccio..."
 Write-Host ""
 
 npm --registry http://localhost:4873 ping

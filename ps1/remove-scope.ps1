@@ -1,16 +1,21 @@
 ﻿param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [string]$PackageName
+    [string]$Scope
 )
 
 $storage = "C:\Users\lenovo\.config\verdaccio\storage"
 $dbFile = Join-Path $storage ".verdaccio-db.json"
 $backupDir = Join-Path $PSScriptRoot "db-backups"
 
+# 归一化:确保 scope 以 @ 开头
+if (-not $Scope.StartsWith("@")) {
+    $Scope = "@" + $Scope
+}
+
 Write-Host "========================================"
-Write-Host " Remove Verdaccio Package"
+Write-Host " Remove Verdaccio Packages by Scope"
 Write-Host "========================================"
-Write-Host "Package: $PackageName"
+Write-Host "Scope: $Scope"
 Write-Host ""
 
 if (-not (Test-Path $dbFile)) {
@@ -36,23 +41,30 @@ $db = Get-Content $dbFile -Raw | ConvertFrom-Json
 # 保存 secret
 $secret = $db.secret
 
-# package name -> storage path
-$packagePath = Join-Path `
-    $storage `
-    ($PackageName -replace "/", "\")
+# 匹配 scope 下的所有包(-like 大小写不敏感)
+$targets = @(
+    $db.list | Where-Object {
+        $_ -like "$Scope/*"
+    }
+)
 
-$existsInDb = @($db.list) -contains $PackageName
-$existsOnDisk = Test-Path $packagePath
-
-Write-Host "In DB   : $existsInDb"
-Write-Host "On disk : $existsOnDisk"
-Write-Host "Path    : $packagePath"
+Write-Host "Packages found: $($targets.Count)"
 Write-Host ""
 
-if (-not $existsInDb -and -not $existsOnDisk) {
-    Write-Host "Package does not exist in DB or storage."
+if ($targets.Count -eq 0) {
+    Write-Host "No packages under scope $Scope."
     exit 0
 }
+
+foreach ($package in $targets) {
+    Write-Host "  $package"
+}
+
+Write-Host ""
+Write-Host "WARNING: This will DELETE the storage of ALL"
+Write-Host "packages listed above and remove them from the DB."
+Write-Host "The DB secret will be preserved."
+Write-Host ""
 
 # 创建 backup
 if (-not (Test-Path $backupDir)) {
@@ -63,11 +75,11 @@ $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 
 $backupFile = Join-Path `
     $backupDir `
-    ".verdaccio-db-before-remove-$timestamp.json"
+    ".verdaccio-db-before-remove-scope-$timestamp.json"
 
 Copy-Item $dbFile $backupFile
 
-Write-Host "DB backup:"
+Write-Host "DB backup created:"
 Write-Host $backupFile
 Write-Host ""
 
@@ -80,19 +92,29 @@ if ($answer -ne "DELETE") {
 }
 
 # 删除 storage
-if (Test-Path $packagePath) {
-    Remove-Item `
-        -LiteralPath $packagePath `
-        -Recurse `
-        -Force
+foreach ($package in $targets) {
 
-    Write-Host "Storage directory deleted."
+    $packagePath = Join-Path `
+        $storage `
+        ($package -replace "/", "\")
+
+    if (Test-Path $packagePath) {
+        Remove-Item `
+            -LiteralPath $packagePath `
+            -Recurse `
+            -Force
+
+        Write-Host "Deleted storage: $package"
+    }
+    else {
+        Write-Host "Storage missing (DB-only): $package"
+    }
 }
 
-# 删除 DB 中的 package
+# 从 DB 中移除
 $kept = @(
     $db.list | Where-Object {
-        $_ -ne $PackageName
+        $_ -notlike "$Scope/*"
     }
 )
 
@@ -112,9 +134,11 @@ $json = $db | ConvertTo-Json -Compress
 
 Write-Host ""
 Write-Host "========================================"
-Write-Host " Package removed"
+Write-Host " Scope removed"
 Write-Host "========================================"
-Write-Host "Package: $PackageName"
+Write-Host "Scope          : $Scope"
+Write-Host "Packages removed: $($targets.Count)"
+Write-Host "Packages kept   : $($kept.Count)"
 Write-Host "DB updated."
 Write-Host "Secret preserved: YES"
 Write-Host "Backup: $backupFile"

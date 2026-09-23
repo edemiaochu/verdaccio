@@ -1,5 +1,4 @@
-```powershell
-$registry = "http://localhost:4873"
+﻿$registry = "http://localhost:4873"
 
 Write-Host "========================================"
 Write-Host " Verdaccio npm Login"
@@ -78,4 +77,3 @@ Write-Host "You can test it with:"
 Write-Host ""
 Write-Host "  npm --registry $registry whoami"
 Write-Host ""
-```
