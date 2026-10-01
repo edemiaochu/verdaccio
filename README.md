@@ -7,12 +7,13 @@
 双击 **`run-ui.vbs`** 即可**无黑框静默启动**,浏览器自动打开 `http://localhost:4874`;在页面右上角「✕ 退出」可关闭服务。需要查看服务日志时用 `run-ui.bat`(带控制台窗口)。
 
 - 点击卡片即可执行全部脚本,输出实时流式显示在底部日志面板
-- **启动可自定义 config.yaml 路径**(弹窗输入,自动记住上次使用的路径)
+- **启动可自定义 config.yaml 路径**(弹窗输入,自动记住上次使用的路径;留空则自动跟随实际使用的配置)
 - **包列表**:浏览全部包的名称 / 版本 / 更新时间,支持搜索与 scope 筛选,可单删
 - **删除 Scope 全部包**:一键删除同一 scope(如 `@szewtwin`)下的所有包,弹窗会预览将删除的包列表
 - 危险操作(删包 / 删 scope / 删除全部包 / 轮换 Secret)需在弹窗中输入确认词,与命令行二次确认一致
 - 删除指定包时可从数据库包列表下拉选择
-- npm 登录通过弹窗填写用户名 / 密码 / 邮箱
+- npm 注册 / 登录通过弹窗填写用户名 / 密码 / 邮箱
+- **上游服务器**:管理 config.yaml 的 uplinks 拉取源(增 / 改 / 删,npm 官方 / 淘宝 / 腾讯镜像快捷填充;删除时自动清理 packages 中的 proxy 引用;每次写入自动备份到 `config-backups\`,可一键重启生效)
 - **远程连接指引**:展示本机局域网 IP、其他电脑接入本私服的完整配置(npm 命令 / .npmrc 内容,一键复制),并自动检测局域网是否可访问、给出开启步骤
 - 顶部实时显示 Verdaccio 在线状态,支持一键终止正在运行的命令
 
@@ -55,16 +56,25 @@ Verdaccio 默认只监听 `localhost`,局域网内其他电脑无法连接。开
 | `backup-db.ps1` | 备份 DB | 备份到 `D:\verdaccio\db-backups` |
 | `check-db.ps1` | 检查失效包 | 列出 DB 中磁盘已丢失的包 |
 | `clean-db.ps1` | 清理失效记录 | 需先停止 Verdaccio,自动备份 |
+| `clean-cache.ps1` | 清空上游缓存包 | 保留本地发布的包,需先停止,确认词 `CLEAN CACHE`,`-DryRun` 仅预览 |
 | `remove-package.ps1 <name>` | 删除单个包 | 需先停止,确认词 `DELETE` |
 | `remove-scope.ps1 <scope>` | 删除 scope 下全部包 | 如 `@szewec`,需先停止,确认词 `DELETE` |
 | `remove-all-packages.ps1` | 删除全部包 | 需先停止,确认词 `DELETE ALL` |
 | `rotate-secret.ps1` | 轮换 Secret | 所有 token 失效,确认词 `ROTATE` |
-| `login.ps1` | npm 登录 | 需 Verdaccio 在线 |
+| `register.ps1` | 注册新用户 | 直接调用 registry API(注册即登录),需 Verdaccio 在线 |
+| `login.ps1` | npm 登录 | 直接调用 registry API,需 Verdaccio 在线 |
 
 每个脚本都有对应的 `run-*.bat` 双击运行。
 
-## 关键路径
+## 关键路径(自动跟随实际使用的配置)
 
-- 配置:`C:\Users\lenovo\.config\verdaccio\config.yaml`
-- 存储 / DB:`C:\Users\lenovo\.config\verdaccio\storage`
+所有脚本与控制台 API 按以下顺序解析 Verdaccio 的 `config.yaml`:
+
+1. 显式传入(启动卡片的 config 路径;Web 控制台启动时会记录到 `active-config.txt`)
+2. 工具箱上次启动使用的配置(`active-config.txt`)
+3. **正在运行的 Verdaccio 进程的 `-c` 参数**(实际正在生效的配置)
+4. 默认 `%APPDATA%\verdaccio\config.yaml`
+
+存储目录从该 yaml 的 `storage:` 字段解析(相对路径基于 config 所在目录,未配置时为 `./storage`)。包列表弹窗标题会显示当前使用的存储路径。环境变量 `VERDACCIO_CONFIG` / `VERDACCIO_STORAGE` 可强制覆盖。
+
 - DB 备份:脚本目录 `db-backups\`、`D:\verdaccio\db-backups\`

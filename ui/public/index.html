@@ -355,6 +355,41 @@
   </div>
 </div>
 
+<!-- 上游服务器弹窗 -->
+<div id="uplinkOverlay" class="overlay hidden">
+  <div class="modal wide">
+    <h3>🔗 上游服务器 Uplinks</h3>
+    <div class="hint" id="uplinkConfigPath" style="margin:-6px 0 12px"></div>
+    <div class="browser-list" style="margin-bottom:14px">
+      <table class="pkgs">
+        <thead><tr><th>名称</th><th>URL</th><th>被 packages 引用</th><th></th></tr></thead>
+        <tbody id="uplinkBody"></tbody>
+      </table>
+    </div>
+    <div class="field">
+      <label>代理设置 — 本地没有的包从哪个上游拉取(packages 的 proxy)</label>
+      <div id="uplinkProxyList" style="display:flex;flex-direction:column;gap:8px"></div>
+    </div>
+    <div class="field">
+      <label>添加 / 修改(点击列表中的名称可载入到表单)</label>
+      <div style="display:flex;gap:8px">
+        <input id="uplinkName" placeholder="名称,如 npmmirror" style="flex:2" autocomplete="off" spellcheck="false">
+        <input id="uplinkUrl" placeholder="https://registry.npmmirror.com/" style="flex:3" autocomplete="off" spellcheck="false">
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
+        <span class="hint">快捷源:</span>
+        <span id="uplinkPresets" style="display:flex;gap:6px;flex-wrap:wrap"></span>
+      </div>
+    </div>
+    <div class="hint" id="uplinkNote" style="min-height:16px;margin-bottom:4px"></div>
+    <div class="modal-btns">
+      <button class="btn" id="uplinkRestart" style="margin-right:auto">↻ 重启 Verdaccio 生效</button>
+      <button class="btn-ghost" id="uplinkClose">关闭</button>
+      <button class="btn-primary" id="uplinkSave">保存</button>
+    </div>
+  </div>
+</div>
+
 <!-- 弹窗 -->
 <div id="overlay" class="overlay hidden">
   <div class="modal">
@@ -384,6 +419,7 @@ const COMMANDS = [
       { id: 'stop',             icon: '⏹️', name: '停止服务', desc: '结束占用 4873 端口的 Verdaccio 进程', warn: '将强制结束 Verdaccio 进程,\n正在进行的发布/安装会中断。' },
       { id: 'status',           icon: '📊', name: '运行状态', desc: '查看 Node 进程与 Registry ping 结果' },
       { id: 'test',             icon: '✅', name: '连通性测试', desc: 'npm ping + 示例包 view 测试' },
+      { id: 'uplinks',          icon: '🔗', name: '上游服务器', desc: '配置 uplinks 拉取源与 packages 代理引用', uplinks: true },
       { id: 'remote-access',    icon: '🌐', name: '远程连接', desc: '查看本机 IP,获取其他电脑接入本私服的配置', remote: true },
     ],
   },
@@ -400,6 +436,7 @@ const COMMANDS = [
     sub: 'packages',
     items: [
       { id: 'browse-packages',    icon: '📦', name: '包列表', desc: '浏览全部包、版本与更新时间,可直接删除', browser: true },
+      { id: 'clean-cache',        icon: '🧽', name: '清空缓存包', desc: '删除全部上游缓存,本地发布的包保留', danger: true, confirm: 'CLEAN CACHE', warn: '将删除所有从上游(如 npmmirror)缓存下来的包,\n本地发布的包(DB 列表)全部保留。\nDB 列表与 secret 不会修改。\n需要先停止 Verdaccio。' },
       { id: 'remove-package',     icon: '🗑️', name: '删除指定包', desc: '从存储与 DB 中删除单个包', danger: true, confirm: 'DELETE', param: 'package', warn: '将删除该包的全部版本与存储文件。\n执行前会自动备份 DB,需要先停止 Verdaccio。' },
       { id: 'remove-scope',       icon: '🧨', name: '删除 Scope 全部包', desc: '删除同一 scope 下的所有包,如 @szewtwin', danger: true, confirm: 'DELETE', param: 'scope', warn: '将删除该 scope 下【所有包】的存储与 DB 记录。\nsecret 保留,执行前自动备份 DB。\n需要先停止 Verdaccio。' },
       { id: 'remove-all-packages', icon: '💣', name: '删除全部包', desc: '清空所有包存储与 DB 列表(secret 保留)', danger: true, confirm: 'DELETE ALL', warn: '将删除 Verdaccio 上【所有包】的全部存储!\nsecret 会保留,执行前自动备份 DB。\n需要先停止 Verdaccio。' },
@@ -409,7 +446,8 @@ const COMMANDS = [
     group: '账户与安全',
     items: [
       { id: 'rotate-secret', icon: '🔑', name: '轮换 Secret', desc: '生成新 secret,所有已登录 token 全部失效', danger: true, confirm: 'ROTATE', warn: '轮换后所有已发布的认证 token 失效,\n所有人需要重新 npm login。\n执行前自动备份 DB,需要先停止 Verdaccio。' },
-      { id: 'login',         icon: '👤', name: 'npm 登录', desc: '向 localhost:4873 登录,更新 .npmrc token', login: true, warn: '需要 Verdaccio 正在运行。\n登录成功后 token 写入当前用户 .npmrc。' },
+      { id: 'register',      icon: '🆕', name: 'npm 注册', desc: '在私服上创建新用户账号(注册即登录)', register: true, warn: '需要 Verdaccio 正在运行。\n用户名已存在且密码不匹配会失败;\n注册成功后同时完成登录,\ntoken 写入当前用户 .npmrc。' },
+      { id: 'login',         icon: '👤', name: 'npm 登录', desc: '向 localhost:4873 登录,更新 .npmrc token', login: true, warn: '需要 Verdaccio 正在运行。\n用户不存在时会自动创建账号。\n登录成功后 token 写入当前用户 .npmrc。' },
     ],
   },
 ];
@@ -445,7 +483,10 @@ function render() {
           <div class="desc">${c.desc}</div>
         </span>`;
       btn.addEventListener('click', () =>
-        c.browser ? openBrowser() : c.remote ? openRemote() : openModal(c));
+        c.browser ? openBrowser()
+        : c.remote ? openRemote()
+        : c.uplinks ? openUplinks()
+        : openModal(c));
       cards.appendChild(btn);
     }
     sec.appendChild(cards);
@@ -495,7 +536,9 @@ async function refreshPackages() {
 // ---------------------------------------------------------------------------
 let modalCtx = null; // 当前弹窗对应的命令
 
-const DEFAULT_CONFIG = 'C:\\Users\\lenovo\\.config\\verdaccio\\config.yaml';
+// 旧版本的失效默认路径,保存过它的自动清空,改走自动解析
+const STALE_DEFAULT = 'C:\\Users\\lenovo\\.config\\verdaccio\\config.yaml';
+const DEFAULT_CONFIG = '';
 
 function field(label, attrs, hint) {
   return `<div class="field">
@@ -547,10 +590,14 @@ function openModal(cmd, preset = {}) {
 
   let fields = '';
   if (cmd.config) {
-    const saved = localStorage.getItem('verdaccio-config') || DEFAULT_CONFIG;
+    let saved = localStorage.getItem('verdaccio-config') || DEFAULT_CONFIG;
+    if (saved === STALE_DEFAULT) {
+      saved = '';
+      localStorage.removeItem('verdaccio-config');
+    }
     fields += field('config.yaml 路径', `
       id="f-config" value="${escAttr(saved)}" autocomplete="off" spellcheck="false"`,
-      '自定义启动配置文件,输入会自动记住');
+      '留空则自动跟随实际使用的配置;填写后会被记住');
   }
   if (cmd.param === 'package') {
     const options = packageList.map((p) => `<option value="${p}">`).join('');
@@ -574,7 +621,7 @@ function openModal(cmd, preset = {}) {
       <div class="scope-preview" id="scopePreview"></div>
     </div>`;
   }
-  if (cmd.login) {
+  if (cmd.login || cmd.register) {
     fields += field('用户名 Username', 'id="f-user" autocomplete="off" spellcheck="false"');
     fields += field('密码 Password', 'id="f-pass" type="password" autocomplete="off"');
     fields += field('邮箱 Email', 'id="f-email" autocomplete="off" spellcheck="false"');
@@ -622,6 +669,9 @@ $('#overlay').addEventListener('click', (e) => {
 $('#browserOverlay').addEventListener('click', (e) => {
   if (e.target === $('#browserOverlay')) closeBrowser();
 });
+$('#uplinkOverlay').addEventListener('click', (e) => {
+  if (e.target === $('#uplinkOverlay')) closeUplinks();
+});
 $('#remoteOverlay').addEventListener('click', (e) => {
   if (e.target === $('#remoteOverlay')) closeRemote();
 });
@@ -629,6 +679,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!$('#overlay').classList.contains('hidden')) closeModal();
   else if (!$('#browserOverlay').classList.contains('hidden')) closeBrowser();
+  else if (!$('#uplinkOverlay').classList.contains('hidden')) closeUplinks();
   else if (!$('#remoteOverlay').classList.contains('hidden')) closeRemote();
 });
 
@@ -656,7 +707,7 @@ $('#modalRun').addEventListener('click', () => {
   if (cmd.confirm) {
     payload.stdin = $('#f-confirm').value.trim();
   }
-  if (cmd.login) {
+  if (cmd.login || cmd.register) {
     const user = $('#f-user').value;
     const pass = $('#f-pass').value;
     const email = $('#f-email').value;
@@ -715,50 +766,58 @@ function createLog(cmd) {
   };
 }
 
-async function runCommand(cmd, payload) {
-  setRunning(true);
-  const log = createLog(cmd);
+// 返回 Promise:命令结束时 resolve,供"重启 Verdaccio"等链式调用
+function runCommand(cmd, payload) {
+  return new Promise((resolve) => {
+    (async () => {
+      setRunning(true);
+      const log = createLog(cmd);
 
-  try {
-    const res = await fetch('/api/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+      try {
+        const res = await fetch('/api/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
 
-    if (!res.ok || !res.body) {
-      const e = await res.json().catch(() => ({}));
-      log.append('✖ ' + (e.error || 'HTTP ' + res.status) + '\n', true);
-      log.finish(1);
-      setRunning(false);
-      return;
-    }
+        if (!res.ok || !res.body) {
+          const e = await res.json().catch(() => ({}));
+          log.append('✖ ' + (e.error || 'HTTP ' + res.status) + '\n', true);
+          log.finish(1);
+          setRunning(false);
+          return resolve();
+        }
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
 
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n\n')) >= 0) {
-        const frame = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        const line = frame.split('\n').find((l) => l.startsWith('data: '));
-        if (!line) continue;
-        handleEvent(JSON.parse(line.slice(6)), log);
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf('\n\n')) >= 0) {
+            const frame = buf.slice(0, idx);
+            buf = buf.slice(idx + 2);
+            const line = frame.split('\n').find((l) => l.startsWith('data: '));
+            if (!line) continue;
+            handleEvent(JSON.parse(line.slice(6)), log, resolve);
+          }
+        }
+        // 流结束仍未收到 exit 事件(服务端异常收尾)时也释放等待
+        resolve();
+      } catch (e) {
+        log.append('✖ 连接中断: ' + e.message + '\n', true);
+        log.finish(1);
+        setRunning(false);
+        resolve();
       }
-    }
-  } catch (e) {
-    log.append('✖ 连接中断: ' + e.message + '\n', true);
-    log.finish(1);
-    setRunning(false);
-  }
+    })();
+  });
 }
 
-function handleEvent(ev, log) {
+function handleEvent(ev, log, done) {
   if (ev.type === 'out') log.append(ev.text, false);
   else if (ev.type === 'err') log.append(ev.text, true);
   else if (ev.type === 'exit') {
@@ -768,6 +827,7 @@ function handleEvent(ev, log) {
     refreshPackages();
     // 包浏览器开着时同步刷新
     if (!$('#browserOverlay').classList.contains('hidden')) loadBrowser();
+    if (done) done();
   }
 }
 
@@ -775,6 +835,7 @@ function handleEvent(ev, log) {
 // 包浏览器
 // ---------------------------------------------------------------------------
 let browserData = [];
+let browserStorage = ''; // 当前实际使用的存储目录(来自 /api/packages)
 
 function findCmd(id) {
   for (const g of COMMANDS) {
@@ -801,6 +862,7 @@ async function loadBrowser() {
     const r = await fetch('/api/packages?detail=1');
     const d = await r.json();
     browserData = (d.detail || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+    browserStorage = d.storage || '';
     packageList = d.packages || browserData.map((x) => x.name);
     refreshPackages(); // 同步分组副标题
     renderBrowser();
@@ -829,7 +891,8 @@ function renderBrowser() {
   });
 
   $('#browserCount').textContent =
-    '共 ' + browserData.length + ' 个包 · 显示 ' + rows.length + ' 个';
+    '共 ' + browserData.length + ' 个包 · 显示 ' + rows.length + ' 个' +
+    (browserStorage ? ' · ' + browserStorage : '');
 
   $('#browserBody').innerHTML = rows.map((p) => `
     <tr>
@@ -852,6 +915,181 @@ $('#browserSearch').addEventListener('input', renderBrowser);
 $('#browserScope').addEventListener('change', renderBrowser);
 $('#browserRefresh').addEventListener('click', loadBrowser);
 $('#browserClose').addEventListener('click', closeBrowser);
+
+// ---------------------------------------------------------------------------
+// 上游服务器 uplinks 管理
+// ---------------------------------------------------------------------------
+let uplinkData = [];
+let uplinkPackages = []; // packages 规则的 proxy 设置
+let uplinkConfig = ''; // 当前配置路径,重启时传给启动脚本
+
+const UPLINK_PRESETS = [
+  { label: 'npm 官方',   url: 'https://registry.npmjs.org/' },
+  { label: '淘宝镜像',   url: 'https://registry.npmmirror.com/' },
+  { label: '腾讯镜像',   url: 'https://mirrors.cloud.tencent.com/npm/' },
+];
+
+async function openUplinks() {
+  $('#uplinkOverlay').classList.remove('hidden');
+  $('#uplinkNote').textContent = '';
+  renderUplinkPresets();
+  await loadUplinks();
+}
+
+function closeUplinks() {
+  $('#uplinkOverlay').classList.add('hidden');
+}
+
+function renderUplinkPresets() {
+  $('#uplinkPresets').innerHTML = UPLINK_PRESETS.map(
+    (p, i) => `<button class="btn" data-preset="${i}">${p.label}</button>`
+  ).join('');
+  $('#uplinkPresets').querySelectorAll('[data-preset]').forEach((b) => {
+    b.addEventListener('click', () => {
+      $('#uplinkUrl').value = UPLINK_PRESETS[Number(b.dataset.preset)].url;
+    });
+  });
+}
+
+async function loadUplinks() {
+  $('#uplinkBody').innerHTML =
+    '<tr><td colspan="4" style="color:#5a6a7d;padding:14px">加载中…</td></tr>';
+  try {
+    const r = await fetch('/api/uplinks');
+    const d = await r.json();
+    uplinkData = d.uplinks || [];
+    uplinkPackages = d.packages || [];
+    uplinkConfig = d.config || '';
+    $('#uplinkConfigPath').textContent = d.error
+      ? d.error
+      : '配置文件:' + uplinkConfig;
+    renderUplinks();
+    renderUplinkProxies();
+  } catch (e) {
+    $('#uplinkBody').innerHTML =
+      '<tr><td colspan="4" style="color:#ff8b84;padding:14px">加载失败: ' + esc(e.message) + '</td></tr>';
+  }
+}
+
+function renderUplinks() {
+  $('#uplinkBody').innerHTML = uplinkData.length
+    ? uplinkData.map((u) => `
+        <tr>
+          <td class="pkg-name" style="cursor:pointer" data-edit="${escAttr(u.name)}" title="点击载入到下方表单">${esc(u.name)}</td>
+          <td style="word-break:break-all">${esc(u.url || '-')}</td>
+          <td class="pkg-time">${u.refs.length ? esc(u.refs.join(', ')) : '<span style="color:#5a6a7d">未引用</span>'}</td>
+          <td class="pkg-del"><button class="mini-btn" data-del="${escAttr(u.name)}">删除</button></td>
+        </tr>`).join('')
+    : '<tr><td colspan="4" style="color:#5a6a7d;padding:14px">暂无上游服务器 — 在下方添加</td></tr>';
+
+  $('#uplinkBody').querySelectorAll('[data-edit]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const u = uplinkData.find((x) => x.name === el.dataset.edit);
+      if (!u) return;
+      $('#uplinkName').value = u.name;
+      $('#uplinkUrl').value = u.url;
+      $('#uplinkName').focus();
+    });
+  });
+  $('#uplinkBody').querySelectorAll('[data-del]').forEach((b) => {
+    b.addEventListener('click', () => deleteUplink(b.dataset.del));
+  });
+}
+
+// 渲染每个 package 规则的 proxy 下拉
+function renderUplinkProxies() {
+  const box = $('#uplinkProxyList');
+  if (!uplinkPackages.length) {
+    box.innerHTML = '<span class="hint">config 中没有 packages 规则</span>';
+    return;
+  }
+  // 单值或多值(逗号分隔)代理:多值时显示为组合值并禁用直改,避免破坏列表
+  const options = (sel) =>
+    '<option value=""' + (sel === '' ? ' selected' : '') + '>(不代理,仅本地包)</option>' +
+    uplinkData.map((u) =>
+      `<option value="${escAttr(u.name)}"${sel === u.name ? ' selected' : ''}>${esc(u.name)}</option>`
+    ).join('');
+  box.innerHTML = uplinkPackages.map((p, i) => {
+    const multi = p.proxy.includes(',');
+    return `<div style="display:flex;align-items:center;gap:10px">
+      <code style="flex:none;min-width:80px;color:#79c0ff;font-size:12.5px">${esc(p.pattern)}</code>
+      ${multi
+        ? `<input value="${escAttr(p.proxy)}" style="flex:1" disabled title="多上游列表,请在配置文件中手动调整">`
+        : `<select data-pat="${escAttr(p.pattern)}" style="flex:1">${options(p.proxy)}</select>`}
+    </div>`;
+  }).join('');
+  box.querySelectorAll('select[data-pat]').forEach((sel) => {
+    sel.addEventListener('change', () => setUplinkProxy(sel.dataset.pat, sel.value));
+  });
+}
+
+async function setUplinkProxy(pattern, name) {
+  const r = await fetch('/api/uplinks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'set-proxy', pattern, name }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { alert(d.error || 'HTTP ' + r.status); loadUplinks(); return; }
+  uplinkData = d.uplinks || uplinkData;
+  uplinkPackages = d.packages || uplinkPackages;
+  renderUplinks();
+  renderUplinkProxies();
+  $('#uplinkNote').textContent = '✓ ' + (d.note || '已保存');
+}
+
+async function saveUplink() {
+  const name = $('#uplinkName').value.trim();
+  const url = $('#uplinkUrl').value.trim();
+  if (!name || !url) { $('#uplinkName').focus(); return; }
+  const action = uplinkData.some((u) => u.name === name) ? 'update' : 'add';
+  const r = await fetch('/api/uplinks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, name, url }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { alert(d.error || 'HTTP ' + r.status); return; }
+  uplinkData = d.uplinks || [];
+  renderUplinks();
+  renderUplinkProxies();
+  $('#uplinkNote').textContent = '✓ ' + (d.note || '已保存');
+}
+
+async function deleteUplink(name) {
+  const u = uplinkData.find((x) => x.name === name);
+  const refsNote = u && u.refs.length
+    ? `\n它正被 ${u.refs.join('、')} 引用,对应的 proxy 配置也会一并移除。`
+    : '';
+  if (!confirm(`确定删除上游服务器 "${name}"?${refsNote}`)) return;
+  const r = await fetch('/api/uplinks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'delete', name }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { alert(d.error || 'HTTP ' + r.status); return; }
+  uplinkData = d.uplinks || [];
+  uplinkPackages = d.packages || uplinkPackages;
+  renderUplinks();
+  renderUplinkProxies();
+  $('#uplinkNote').textContent = '✓ ' + (d.note || '已删除');
+}
+
+async function restartVerdaccio() {
+  if (running) return;
+  if (!confirm('重启 Verdaccio 使新配置生效?\n(服务会中断几秒,日志面板可见执行过程)')) return;
+  closeUplinks();
+  // 传当前配置路径给启动脚本,确保重启用的就是刚修改的这份 config
+  const payload = uplinkConfig ? { id: 'start-background', config: uplinkConfig } : { id: 'start-background' };
+  await runCommand(findCmd('stop'), { id: 'stop' });
+  await runCommand(findCmd('start-background'), payload);
+  refreshStatus();
+}
+
+$('#uplinkSave').addEventListener('click', saveUplink);
+$('#uplinkClose').addEventListener('click', closeUplinks);
+$('#uplinkRestart').addEventListener('click', restartVerdaccio);
 
 // ---------------------------------------------------------------------------
 // 远程连接指引

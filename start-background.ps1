@@ -1,8 +1,11 @@
 ﻿param(
-    [string]$Config = "C:\Users\lenovo\.config\verdaccio\config.yaml"
+    [string]$Config = ""
 )
 
-$config = $Config
+. "$PSScriptRoot\resolve-paths.ps1"
+
+# 未显式指定时,跟随工具箱启动记录 / 运行中的 Verdaccio / 默认配置
+$config = Resolve-VerdaccioConfig $Config
 $logDir = "D:\verdaccio\logs"
 
 if (-not (Test-Path $logDir)) {

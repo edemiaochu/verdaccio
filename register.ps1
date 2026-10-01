@@ -1,7 +1,7 @@
 ﻿$registry = "http://localhost:4873"
 
 Write-Host "========================================"
-Write-Host " Verdaccio npm Login"
+Write-Host " Verdaccio npm Register"
 Write-Host "========================================"
 Write-Host ""
 Write-Host "Registry:"
@@ -49,8 +49,9 @@ Write-Host ""
 
 # Read credentials:
 #   - Piped stdin (web console): three lines - username / password / email.
-#     npm 11 login prompts no longer accept piped stdin, so we call the
-#     registry API directly: PUT /-/user/org.couchdb.user:<name>
+#     npm 11 login/adduser prompts no longer accept piped stdin, so we call
+#     the registry API directly: PUT /-/user/org.couchdb.user:<name>
+#     (the same protocol behind npm adduser).
 #   - Interactive (double-click bat): typed input, password masked.
 if ([Console]::IsInputRedirected) {
     $username = [Console]::In.ReadLine()
@@ -75,13 +76,16 @@ if (-not $username -or -not $password) {
     exit 1
 }
 
+if ($username -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._-]*$') {
+    Write-Host ""
+    Write-Host "ERROR: invalid username '$username'."
+    Write-Host "Allowed: letters, digits, '.', '_', '-', and it cannot start with '.' or '-'."
+    exit 1
+}
+
 if (-not $email) { $email = "nobody@localhost" }
 
-# Call the registry login API (the protocol behind npm login).
-# The PUT must carry a Basic auth header (user:password) - that is how
-# verdaccio distinguishes login from registration on this endpoint.
-# Note: if the username does not exist yet, Verdaccio creates it
-# automatically (same behavior as npm adduser).
+# Call the registry user registration API
 $body = @{
     name     = $username
     password = $password
@@ -91,11 +95,8 @@ $body = @{
     date     = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
 } | ConvertTo-Json
 
-$basic = [System.Convert]::ToBase64String(
-    [System.Text.Encoding]::UTF8.GetBytes("${username}:${password}"))
-
 Write-Host ""
-Write-Host "Logging in user '$username'..."
+Write-Host "Registering user '$username'..."
 Write-Host ""
 
 $token = $null
@@ -104,7 +105,6 @@ try {
     $resp = Invoke-RestMethod `
         -Method Put `
         -Uri "$registry/-/user/org.couchdb.user:$username" `
-        -Headers @{ Authorization = "Basic $basic" } `
         -ContentType "application/json; charset=utf-8" `
         -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) `
         -TimeoutSec 15
@@ -113,13 +113,13 @@ try {
         Write-Host "OK: $($resp.ok)"
     }
     else {
-        Write-Host "OK: logged in as '$username'."
+        Write-Host "OK: user '$username' registered."
     }
 
     $token = $resp.token
 }
 catch {
-    Write-Host "ERROR: login failed."
+    Write-Host "ERROR: registration failed."
     $status = $null
 
     if ($_.Exception.Response) {
@@ -128,12 +128,18 @@ catch {
 
     if ($status -eq 401) {
         Write-Host ""
-        Write-Host "401 Unauthorized: wrong username or password."
+        Write-Host "401 Unauthorized: username '$username' already exists"
+        Write-Host "and the password does not match."
+    }
+    elseif ($status -eq 409) {
+        Write-Host ""
+        Write-Host "409 Conflict: username '$username' is already registered."
     }
     elseif ($status -eq 403) {
         Write-Host ""
-        Write-Host "403 Forbidden: login rejected by the registry."
-        Write-Host "Check 'auth.htpasswd.max_users' in config.yaml."
+        Write-Host "403 Forbidden: registration is rejected."
+        Write-Host "Check 'auth.htpasswd.max_users' in config.yaml"
+        Write-Host "(-1 disables registration)."
     }
     else {
         Write-Host ""
@@ -143,7 +149,8 @@ catch {
     exit 1
 }
 
-# 登录成功后把 token 写入 .npmrc(与 npm login 行为一致)
+# Registration also logs you in: write the token to .npmrc,
+# same as npm adduser does.
 if ($token) {
     $npmrc   = Join-Path $env:USERPROFILE ".npmrc"
     $authKey = "//" + ($registry -replace '^https?://', '') + "/"
@@ -167,16 +174,18 @@ if ($token) {
     catch {
         Write-Host ""
         Write-Host "WARN: could not write .npmrc ($($_.Exception.Message))."
+        Write-Host "Run login to get a token."
     }
 }
 else {
     Write-Host ""
     Write-Host "No token returned by the registry."
+    Write-Host "Run login to get a token."
 }
 
 Write-Host ""
 Write-Host "========================================"
-Write-Host " Login completed"
+Write-Host " Register completed"
 Write-Host "========================================"
 Write-Host ""
 Write-Host "You can test it with:"

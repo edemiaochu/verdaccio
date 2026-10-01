@@ -1,0 +1,1 @@
+C:\Users\Lenovo\AppData\Roaming\verdaccio\config.yaml

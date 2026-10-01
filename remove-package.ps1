@@ -1,9 +1,17 @@
 ﻿param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [string]$PackageName
+    [string]$PackageName,
+    [string]$Config = ""
 )
 
-$storage = "C:\Users\lenovo\.config\verdaccio\storage"
+. "$PSScriptRoot\resolve-paths.ps1"
+
+$config  = Resolve-VerdaccioConfig $Config
+$storage = Resolve-VerdaccioStorage $config
+$dbFile  = Join-Path $storage ".verdaccio-db.json"
+
+Write-Host "Config:  $config"
+Write-Host "Storage: $storage"
 $dbFile = Join-Path $storage ".verdaccio-db.json"
 $backupDir = Join-Path $PSScriptRoot "db-backups"
 
@@ -31,7 +39,23 @@ if ($null -ne $connections) {
     exit 1
 }
 
-$db = Get-Content $dbFile -Raw | ConvertFrom-Json
+# DB 解析失败(损坏/空文件)时必须立即退出,
+# 否则 $db 为 null,后面会把 DB 写成 0 字节,secret 丢失 → 所有 token 失效
+try {
+    $db = Get-Content $dbFile -Raw | ConvertFrom-Json
+}
+catch {
+    Write-Host "ERROR: DB file is corrupted / not valid JSON:"
+    Write-Host $dbFile
+    Write-Host "Nothing was deleted. Restore it from db-backups first."
+    exit 1
+}
+
+if ($null -eq $db -or [string]::IsNullOrWhiteSpace("$($db.secret)")) {
+    Write-Host "ERROR: DB is empty or the secret is missing."
+    Write-Host "Nothing was deleted."
+    exit 1
+}
 
 # 保存 secret
 $secret = $db.secret
@@ -101,8 +125,8 @@ $db.list = $kept
 # 明确保留 secret
 $db.secret = $secret
 
-# 写回 DB
-$json = $db | ConvertTo-Json -Compress
+# 写回 DB(-Depth 必须 ≥ 3,默认 2 会把嵌套对象写成类型名字符串)
+$json = $db | ConvertTo-Json -Compress -Depth 100
 
 [System.IO.File]::WriteAllText(
     $dbFile,

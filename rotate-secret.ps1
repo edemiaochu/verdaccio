@@ -1,12 +1,15 @@
-﻿$storage = "C:\Users\lenovo\.config\verdaccio\storage"
+﻿. "$PSScriptRoot\resolve-paths.ps1"
+
+$config  = Resolve-VerdaccioConfig
+$storage = Resolve-VerdaccioStorage $config
+$dbFile  = Join-Path $storage ".verdaccio-db.json"
+
+Write-Host "Config:  $config"
+Write-Host "Storage: $storage"
 $dbFile = Join-Path $storage ".verdaccio-db.json"
 
-# 因为当前脚本位于：
-# verdaccio-tools-windows\ps1\
-# 所以工具根目录是上一级
-$toolRoot = Split-Path $PSScriptRoot -Parent
-
-$backupDir = Join-Path $toolRoot "backups"
+# 备份统一放在脚本同级的 db-backups\
+$backupDir = Join-Path $PSScriptRoot "db-backups"
 
 Write-Host "========================================"
 Write-Host " Verdaccio Secret Rotation"

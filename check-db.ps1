@@ -1,4 +1,11 @@
-﻿$storage = "C:\Users\lenovo\.config\verdaccio\storage"
+﻿. "$PSScriptRoot\resolve-paths.ps1"
+
+$config  = Resolve-VerdaccioConfig
+$storage = Resolve-VerdaccioStorage $config
+$dbFile  = Join-Path $storage ".verdaccio-db.json"
+
+Write-Host "Config:  $config"
+Write-Host "Storage: $storage"
 $dbFile = Join-Path $storage ".verdaccio-db.json"
 
 if (-not (Test-Path $dbFile)) {

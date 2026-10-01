@@ -1,7 +1,15 @@
-﻿$storage = "C:\Users\lenovo\.config\verdaccio\storage"
+﻿. "$PSScriptRoot\resolve-paths.ps1"
+
+$config  = Resolve-VerdaccioConfig
+$storage = Resolve-VerdaccioStorage $config
+$dbFile  = Join-Path $storage ".verdaccio-db.json"
+
+Write-Host "Config:  $config"
+Write-Host "Storage: $storage"
 $dbFile = Join-Path $storage ".verdaccio-db.json"
 
-$backupDir = "D:\verdaccio\db-backups"
+# 备份统一放在脚本同级的 db-backups\(与其他脚本一致)
+$backupDir = Join-Path $PSScriptRoot "db-backups"
 
 Write-Host "========================================"
 Write-Host " Verdaccio DB Cleanup"
@@ -62,9 +70,25 @@ Write-Host $backupFile
 # 4. 读取 DB
 # ----------------------------------------
 
-$db = Get-Content $dbFile -Raw | ConvertFrom-Json
+# DB 解析失败(损坏/空文件)时必须立即退出,
+# 否则 $db 为 null,后面会把 DB 写成 0 字节,secret 丢失 → 所有 token 失效
+try {
+    $db = Get-Content $dbFile -Raw | ConvertFrom-Json
+}
+catch {
+    Write-Host "ERROR: DB file is corrupted / not valid JSON:"
+    Write-Host $dbFile
+    Write-Host "Nothing was deleted. Restore it from db-backups first."
+    exit 1
+}
 
-$originalCount = $db.list.Count
+if ($null -eq $db -or [string]::IsNullOrWhiteSpace("$($db.secret)")) {
+    Write-Host "ERROR: DB is empty or the secret is missing."
+    Write-Host "Nothing was deleted."
+    exit 1
+}
+
+$originalCount = @($db.list).Count
 
 # ----------------------------------------
 # 5. 保留 secret
@@ -129,7 +153,7 @@ $db.secret = $secret
 # 9. 写回
 # ----------------------------------------
 
-$json = $db | ConvertTo-Json -Compress
+$json = $db | ConvertTo-Json -Compress -Depth 100
 
 [System.IO.File]::WriteAllText(
     $dbFile,
@@ -147,8 +171,7 @@ Write-Host "DB:"
 Write-Host $dbFile
 
 Write-Host ""
-Write-Host "Secret preserved:"
-Write-Host $db.secret
+Write-Host "Secret preserved: YES"
 
 Write-Host ""
 Write-Host "Backup:"
