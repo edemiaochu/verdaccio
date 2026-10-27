@@ -6,7 +6,7 @@
 
 # 未显式指定时,跟随工具箱启动记录 / 运行中的 Verdaccio / 默认配置
 $config = Resolve-VerdaccioConfig $Config
-$logDir = "D:\verdaccio\logs"
+$logDir = "C:\lk\01_work\verdaccio\logs"
 
 if (-not (Test-Path $logDir)) {
     New-Item -ItemType Directory -Path $logDir | Out-Null

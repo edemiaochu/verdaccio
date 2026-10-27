@@ -1,0 +1,18 @@
+# 运行数据与备份 —— db-backups 里是 .verdaccio-db.json 备份,含 secret,绝不能提交
+db-backups/
+config-backups/
+
+# export-packages.ps1 的默认导出目录(tarball / 迁移包产物)
+package-export/
+
+# 工具箱运行时记录的本机状态(上次启动 Verdaccio 使用的 config 路径)
+active-config.txt
+
+# Node
+node_modules/
+npm-debug.log*
+
+# 系统 / 编辑器杂项
+Thumbs.db
+Desktop.ini
+.DS_Store

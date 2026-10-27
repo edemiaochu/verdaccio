@@ -1,7 +1,7 @@
 ﻿$storage = "C:\Users\lenovo\.config\verdaccio\storage"
 $dbFile = Join-Path $storage ".verdaccio-db.json"
 
-$backupDir = "D:\verdaccio\db-backups"
+$backupDir = "C:\lk\01_work\verdaccio\db-backups"
 
 if (-not (Test-Path $backupDir)) {
     New-Item -ItemType Directory -Path $backupDir | Out-Null

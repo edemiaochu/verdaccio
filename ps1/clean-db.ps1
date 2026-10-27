@@ -1,7 +1,7 @@
 ﻿$storage = "C:\Users\lenovo\.config\verdaccio\storage"
 $dbFile = Join-Path $storage ".verdaccio-db.json"
 
-$backupDir = "D:\verdaccio\db-backups"
+$backupDir = "C:\lk\01_work\verdaccio\db-backups"
 
 Write-Host "========================================"
 Write-Host " Verdaccio DB Cleanup"

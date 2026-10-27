@@ -34,11 +34,15 @@ const SCRIPTS = {
   'clean-db':            { file: 'clean-db.ps1' },
   'clean-cache':         { file: 'clean-cache.ps1' },
   'remove-package':      { file: 'remove-package.ps1' },
+  'remove-package-list': { file: 'remove-package-list.ps1' },
   'remove-scope':        { file: 'remove-scope.ps1' },
   'remove-all-packages': { file: 'remove-all-packages.ps1' },
   'rotate-secret':       { file: 'rotate-secret.ps1' },
   'login':               { file: 'login.ps1' },
   'register':            { file: 'register.ps1' },
+  'migrate-packages':    { file: 'migrate-packages.ps1' },
+  'export-packages':     { file: 'export-packages.ps1' },
+  'import-packages':     { file: 'import-packages.ps1' },
 };
 
 let current = null; // 正在运行的子进程
@@ -187,14 +191,31 @@ function readPackageDetail(name, storageDir) {
     // verdaccio 存储的是 packument 格式,最新版本在 dist-tags.latest
     const version =
       (m['dist-tags'] && m['dist-tags'].latest) || m.version || '-';
+    // 版本按发布时间排序(无记录的按版本号自然序),供列表导出用
+    const time = m.time || {};
+    const versions = Object.keys(m.versions || {}).sort((a, b) => {
+      const ta = Date.parse(time[a] || '') || 0;
+      const tb = Date.parse(time[b] || '') || 0;
+      return ta - tb || a.localeCompare(b, undefined, { numeric: true });
+    });
     return {
       name,
       version,
       description: m.description || '',
       modified: st.mtime.toISOString(),
+      versions,
+      distTags: m['dist-tags'] || {},
     };
   } catch {
-    return { name, version: '-', description: '', modified: null, missing: true };
+    return {
+      name,
+      version: '-',
+      description: '',
+      modified: null,
+      versions: [],
+      distTags: {},
+      missing: true,
+    };
   }
 }
 
@@ -216,6 +237,144 @@ async function handlePackages(res, detail) {
       json(res, 200, { count: 0, packages: [], detail: [], config, storage, error: 'DB 解析失败: ' + e.message });
     }
   });
+}
+
+// ---------------------------------------------------------------------------
+// API: 导出包列表为 JSON 文件(浏览器下载)
+//   GET /api/packages/export              → 完整版(版本 / dist-tags 等)
+//   GET /api/packages/export?format=names → 简洁版(仅包名数组)
+//   GET /api/packages/export?format=specs → 简洁版(包名@最新版本,可直接 npm install)
+// ---------------------------------------------------------------------------
+
+function fileTimestamp() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return (
+    d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) +
+    '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds())
+  );
+}
+
+async function handlePackagesExport(res, format) {
+  const { config, storage } = await resolveActivePaths();
+  const dbFile = path.join(storage, '.verdaccio-db.json');
+  fs.readFile(dbFile, 'utf8', (err, data) => {
+    if (err) {
+      json(res, 404, { error: 'DB 文件未找到: ' + dbFile });
+      return;
+    }
+    try {
+      const db = JSON.parse(data);
+      const list = Array.isArray(db.list) ? db.list : [];
+      const names = list.slice().sort((a, b) => a.localeCompare(b));
+
+      let body;
+      let filename;
+      if (format === 'names') {
+        body = JSON.stringify({ packages: names }, null, 2);
+        filename = 'verdaccio-package-names-';
+      } else if (format === 'specs') {
+        // 包名@最新版本(dist-tags.latest),等价于 npm 安装规格
+        const specs = names.map((n) => {
+          const d = readPackageDetail(n, storage);
+          const v = d.version && d.version !== '-' ? d.version : null;
+          return v ? n + '@' + v : n;
+        });
+        body = JSON.stringify({ packages: specs }, null, 2);
+        filename = 'verdaccio-package-specs-';
+      } else {
+        const packages = list
+          .map((name) => readPackageDetail(name, storage))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        body = JSON.stringify(
+          {
+            generated: new Date().toISOString(),
+            config,
+            storage,
+            count: packages.length,
+            packages,
+          },
+          null,
+          2
+        );
+        filename = 'verdaccio-packages-';
+      }
+
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Disposition':
+          'attachment; filename="' + filename + fileTimestamp() + '.json"',
+        'Cache-Control': 'no-store',
+      });
+      res.end(body);
+    } catch (e) {
+      json(res, 500, { error: 'DB 解析失败: ' + e.message });
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// API: 包列表文件预览 —— 按列表删除包的弹窗在执行前展示将删除的包名
+//   GET /api/list-preview?path=<绝对路径>
+//   解析规则与 remove-package-list.ps1 一致:JSON(packages 数组 / 顶层数组 /
+//   含 name 的对象)或每行一个包名的文本;name@version 条目去掉版本号
+// ---------------------------------------------------------------------------
+
+function extractListNames(raw) {
+  const invalid = [];
+  const names = [];
+  const seen = new Set();
+  let entries;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'packages' in parsed) {
+      entries = Array.isArray(parsed.packages) ? parsed.packages : [parsed.packages];
+    } else {
+      entries = Array.isArray(parsed) ? parsed : [parsed];
+    }
+  } catch {
+    entries = raw
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter((s) => s && !s.startsWith('#'));
+  }
+  for (const e of entries) {
+    let text = null;
+    if (typeof e === 'string') text = e;
+    else if (e && typeof e === 'object' && e.name != null) text = String(e.name);
+    if (text == null || !text.trim()) {
+      invalid.push(typeof e === 'object' && e !== null ? JSON.stringify(e).slice(0, 80) : String(e));
+      continue;
+    }
+    text = text.trim();
+    // name@version → 取包名(scoped 名 @scope/name 里的 @ 不受影响)
+    let name = text;
+    const m = text.match(/^(@?[^@]+(\/[^@]+)?)@([^@]+)$/);
+    if (m) name = m[1];
+    if (!/^[@a-zA-Z0-9][@a-zA-Z0-9\/._-]*$/.test(name)) {
+      invalid.push(text);
+      continue;
+    }
+    if (!seen.has(name)) {
+      seen.add(name);
+      names.push(name);
+    }
+  }
+  return { names, invalid };
+}
+
+async function handleListPreview(res, filePath) {
+  if (!/^[a-zA-Z]:[\\/][^<>:"|?*\r\n]+$/i.test(filePath)) {
+    return json(res, 400, { error: '路径不合法(应为绝对路径): ' + filePath });
+  }
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, 'utf8');
+  } catch (e) {
+    return json(res, 400, { error: '文件读取失败: ' + e.message });
+  }
+  const { names, invalid } = extractListNames(raw);
+  json(res, 200, { count: names.length, packages: names, invalid });
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +414,17 @@ async function handleRun(req, res) {
     if (!scope.startsWith('@')) scope = '@' + scope;
     args.push(scope);
   }
+  if (id === 'remove-package-list') {
+    const f = String(body.listfile || '').trim();
+    if (!/^[a-zA-Z]:[\\/][^<>:"|?*\r\n]+$/i.test(f)) {
+      return json(res, 400, { error: '包列表文件路径不合法(应为绝对路径): ' + f });
+    }
+    if (!fs.existsSync(f)) {
+      return json(res, 400, { error: '包列表文件不存在: ' + f });
+    }
+    args.push('-List', f);
+    if (body.dryRun) args.push('-DryRun');
+  }
   if (id === 'start' || id === 'start-background') {
     const cfg = String(body.config || '').trim();
     if (cfg) {
@@ -269,16 +439,94 @@ async function handleRun(req, res) {
       args.push(cfg);
     }
   }
+  // 迁移 / 导出命令的选包参数(共用校验):成功 push 到 args,失败返回错误文本
+  const pushSelection = () => {
+    const scope = String(body.scope || '').trim();
+    if (scope) {
+      if (!/^@?[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(scope)) return 'scope 不合法: ' + scope;
+      args.push('-Scope', scope.startsWith('@') ? scope : '@' + scope);
+    }
+    const pkgs = String(body.packages || '').trim();
+    if (pkgs) {
+      const names = pkgs.split(/[\s,;]+/).filter(Boolean);
+      if (names.length > 500) return '一次最多指定 500 个包';
+      for (const n of names) {
+        if (!/^[@a-zA-Z0-9][@a-zA-Z0-9\/._-]*$/.test(n)) return '包名不合法: ' + n;
+      }
+      args.push('-Packages', names.join(','));
+    }
+    return null;
+  };
+  if (id === 'migrate-packages') {
+    const reg = String(body.registry || '').trim().replace(/\/+$/, '');
+    if (!/^https?:\/\/[^\s'"]+$/i.test(reg)) {
+      return json(res, 400, { error: '目标 Registry URL 不合法(需 http(s):// 开头): ' + reg });
+    }
+    args.push('-Registry', reg);
+    const err = pushSelection();
+    if (err) return json(res, 400, { error: err });
+    if (body.includeCache) args.push('-IncludeCache');
+    if (body.dryRun) args.push('-DryRun');
+  }
+  if (id === 'export-packages') {
+    const err = pushSelection();
+    if (err) return json(res, 400, { error: err });
+    const out = String(body.out || '').trim();
+    if (out) {
+      if (!/^[a-zA-Z]:[\\/][^<>:"|?*\r\n]+$/i.test(out)) {
+        return json(res, 400, { error: '导出目录路径不合法(应为绝对路径): ' + out });
+      }
+      args.push('-Out', out);
+    }
+    if (body.includeCache) args.push('-IncludeCache');
+    if (body.zip) args.push('-Zip');
+    if (body.dryRun) args.push('-DryRun');
+  }
+  if (id === 'import-packages') {
+    const bundle = String(body.bundle || '').trim();
+    if (!/^[a-zA-Z]:[\\/][^<>:"|?*\r\n]+$/i.test(bundle)) {
+      return json(res, 400, { error: '迁移包路径不合法(应为绝对路径): ' + bundle });
+    }
+    if (!fs.existsSync(bundle)) {
+      return json(res, 400, { error: '迁移包不存在: ' + bundle });
+    }
+    args.push('-Bundle', bundle);
+    const mode = String(body.mode || 'registry');
+    if (mode === 'registry') {
+      const reg = String(body.registry || '').trim().replace(/\/+$/, '');
+      if (!/^https?:\/\/[^\s'"]+$/i.test(reg)) {
+        return json(res, 400, { error: '目标 Registry URL 不合法(需 http(s):// 开头): ' + reg });
+      }
+      args.push('-Registry', reg);
+    } else if (mode === 'storage') {
+      const st = String(body.storage || '').trim().replace(/[\\/]+$/, '');
+      if (!/^[a-zA-Z]:[\\/][^<>:"|?*\r\n]+$/i.test(st)) {
+        return json(res, 400, { error: 'storage 路径不合法(应为绝对路径): ' + st });
+      }
+      if (!fs.existsSync(st)) {
+        return json(res, 400, { error: 'storage 目录不存在: ' + st });
+      }
+      args.push('-Storage', st);
+    } else {
+      return json(res, 400, { error: '导入方式不合法: ' + mode });
+    }
+    if (body.dryRun) args.push('-DryRun');
+  }
 
   // stdin:交互脚本通过它接收确认词 / 登录信息
   const stdinText = typeof body.stdin === 'string' ? body.stdin : '';
 
   const scriptPath = path.join(ROOT, def.file);
+  // 参数名(-Xxx)不能加引号:PowerShell 只把裸 -Xxx 识别为参数名,
+  // 加引号会被当成位置参数的值;其余值一律 psQuote 防注入
+  const argStr = args
+    .map((a) => (/^-[A-Za-z][A-Za-z0-9]*$/.test(a) ? a : psQuote(a)))
+    .join(' ');
   const psCommand =
     "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; " +
     "try{[Console]::InputEncoding=[System.Text.Encoding]::UTF8}catch{}; " +
     '& ' + psQuote(scriptPath) +
-    (args.length ? ' ' + args.map(psQuote).join(' ') : '');
+    (args.length ? ' ' + argStr : '');
 
   const child = spawn(
     'powershell.exe',
@@ -738,7 +986,7 @@ const server = http.createServer((req, res) => {
         res.end('index.html 读取失败: ' + err.message);
         return;
       }
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(data);
     });
     return;
@@ -759,6 +1007,15 @@ const server = http.createServer((req, res) => {
     handlePackages(res, u.searchParams.get('detail') === '1').catch((e) =>
       json(res, 500, { error: e.message })
     );
+    return;
+  }
+  if (req.method === 'GET' && url === '/api/packages/export') {
+    handlePackagesExport(res, u.searchParams.get('format') || '')
+      .catch((e) => json(res, 500, { error: e.message }));
+    return;
+  }
+  if (req.method === 'GET' && url === '/api/list-preview') {
+    handleListPreview(res, u.searchParams.get('path') || '');
     return;
   }
   if (req.method === 'POST' && url === '/api/run') {

@@ -342,6 +342,11 @@
       <input id="browserSearch" placeholder="搜索包名…" autocomplete="off" spellcheck="false">
       <select id="browserScope"></select>
       <button class="btn" id="browserRefresh">刷新</button>
+      <label style="display:flex;align-items:center;gap:5px;flex:none;white-space:nowrap;cursor:pointer;font-size:12px;color:var(--muted)" title="导出名称时带上 @最新版本号(如 pkg@1.2.3)">
+        <input type="checkbox" id="browserExportWithVersion" style="flex:none;min-width:0;width:auto;margin:0">带版本
+      </label>
+      <button class="btn" id="browserExportNames" title="导出包名数组(简洁版 JSON);勾选「带版本」则为 包名@版本">⬇ 导出名称</button>
+      <button class="btn" id="browserExport" title="导出完整包列表(含版本与 dist-tags)的 JSON 文件">⬇ 导出 JSON</button>
     </div>
     <div class="browser-list">
       <table class="pkgs">
@@ -414,7 +419,7 @@ const COMMANDS = [
   {
     group: '服务控制',
     items: [
-      { id: 'start-background', icon: '🚀', name: '后台启动', desc: '隐藏窗口启动 Verdaccio,日志写入 D:\\verdaccio\\logs', config: true },
+      { id: 'start-background', icon: '🚀', name: '后台启动', desc: '隐藏窗口启动 Verdaccio,日志写入 C:\\lk\\01_work\\verdaccio\\logs', config: true },
       { id: 'start',            icon: '🖥️', name: '前台启动', desc: '前台运行,持续占用本控制台(可随时终止)', warn: '命令会一直运行不会自动结束,\n点击「终止当前命令」可停止。', config: true },
       { id: 'stop',             icon: '⏹️', name: '停止服务', desc: '结束占用 4873 端口的 Verdaccio 进程', warn: '将强制结束 Verdaccio 进程,\n正在进行的发布/安装会中断。' },
       { id: 'status',           icon: '📊', name: '运行状态', desc: '查看 Node 进程与 Registry ping 结果' },
@@ -436,8 +441,12 @@ const COMMANDS = [
     sub: 'packages',
     items: [
       { id: 'browse-packages',    icon: '📦', name: '包列表', desc: '浏览全部包、版本与更新时间,可直接删除', browser: true },
+      { id: 'migrate-packages',   icon: '🚚', name: '迁移包到其他 Registry', desc: '把本地已发布的包(全部 / 指定)推送到另一台 npm 服务器', migrate: true, danger: true, confirm: 'MIGRATE', warn: '将把所选包的全部版本逐个发布到目标 Registry。\n源 Verdaccio 无需停止:只读取存储,不修改本地数据。\n目标上已存在的同名同版本会自动跳过,可重复执行。\n注意:版本的更新时间无法保留,目标上显示的是迁移时间。' },
+      { id: 'export-packages',    icon: '📤', name: '导出包(离线迁移)', desc: '把包导出为文件夹 / zip,带到无法直连的内网', export: true, warn: '只读取本机存储,不修改任何数据。\n导出内容包含 tarball、校验清单(manifest.json)、\n导入脚本与使用说明,可用 U 盘等介质带入内网。' },
+      { id: 'import-packages',    icon: '📥', name: '导入包(离线迁移)', desc: '把导出的包导入内网 Registry 或 Verdaccio 存储', import: true, danger: true, confirm: 'IMPORT', warn: '将把迁移包中的包导入目标。\n发布模式:逐版本 npm publish,目标已有版本自动跳过。\n存储模式:直接复制进 storage 并写入 DB 列表,\n保留原发布时间,需要先停止目标 Verdaccio。\n每个 tarball 先按校验和核对,拷贝损坏会被拦截。' },
       { id: 'clean-cache',        icon: '🧽', name: '清空缓存包', desc: '删除全部上游缓存,本地发布的包保留', danger: true, confirm: 'CLEAN CACHE', warn: '将删除所有从上游(如 npmmirror)缓存下来的包,\n本地发布的包(DB 列表)全部保留。\nDB 列表与 secret 不会修改。\n需要先停止 Verdaccio。' },
       { id: 'remove-package',     icon: '🗑️', name: '删除指定包', desc: '从存储与 DB 中删除单个包', danger: true, confirm: 'DELETE', param: 'package', warn: '将删除该包的全部版本与存储文件。\n执行前会自动备份 DB,需要先停止 Verdaccio。' },
+      { id: 'remove-package-list', icon: '📋', name: '按列表删除包', desc: '读取包列表文件(JSON / 文本),批量删除其中的包', danger: true, confirm: 'DELETE LIST', listFile: true, warn: '将删除列表中【所有包】的存储与 DB 记录(整个包,含全部版本)。\nname@version 条目也按整个包删除。\n执行前自动备份 DB,需要先停止 Verdaccio。\n弹窗会预览将删除的包列表,请核对后再确认。' },
       { id: 'remove-scope',       icon: '🧨', name: '删除 Scope 全部包', desc: '删除同一 scope 下的所有包,如 @szewtwin', danger: true, confirm: 'DELETE', param: 'scope', warn: '将删除该 scope 下【所有包】的存储与 DB 记录。\nsecret 保留,执行前自动备份 DB。\n需要先停止 Verdaccio。' },
       { id: 'remove-all-packages', icon: '💣', name: '删除全部包', desc: '清空所有包存储与 DB 列表(secret 保留)', danger: true, confirm: 'DELETE ALL', warn: '将删除 Verdaccio 上【所有包】的全部存储!\nsecret 会保留,执行前自动备份 DB。\n需要先停止 Verdaccio。' },
     ],
@@ -621,6 +630,127 @@ function openModal(cmd, preset = {}) {
       <div class="scope-preview" id="scopePreview"></div>
     </div>`;
   }
+  if (cmd.migrate || cmd.export) {
+    fields += `<div class="field">
+      <label>迁移范围</label>
+      <select id="f-migrate-mode">
+        <option value="all">全部本地发布的包</option>
+        <option value="scope">指定 Scope</option>
+        <option value="packages">指定包(可多个)</option>
+      </select>
+      <div class="hint">源 Verdaccio 无需停止;默认只处理数据库列表中的本地发布包</div>
+    </div>`;
+    const scopes = getScopes();
+    fields += `<div class="field hidden" id="f-migrate-scope-field">
+      <label>Scope</label>
+      <select id="f-scope">
+        ${scopes.map((s) => `<option value="${s.name}">${s.name}(${s.count} 个包)</option>`).join('')}
+      </select>
+      <div class="hint">将处理所选 scope 下的全部包</div>
+      <label style="margin-top:8px">将处理以下包:</label>
+      <div class="scope-preview" id="scopePreview"></div>
+    </div>`;
+    const options = packageList.map((p) => `<option value="${p}">`).join('');
+    fields += `<div class="field hidden" id="f-migrate-pkgs-field">
+      <label>包名列表(逗号 / 空格分隔,可从下拉选择)</label>
+      <input id="f-migrate-pkgs" list="pkg-list"
+        placeholder="@szewec/bis-core-schema, internal-tools"
+        autocomplete="off" spellcheck="false">
+    </div>
+    <datalist id="pkg-list">${options}</datalist>`;
+    fields += `<div class="field">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="f-include-cache" style="width:auto;margin:0">
+        包含依赖到的缓存包(-IncludeCache)
+      </label>
+      <div class="hint">自动按依赖闭包把选中包依赖到的上游公共包(如 flatbuffers、yargs)连同它们的依赖一起带上;完全离线的内网必勾选。只含本地已有 tarball 的版本;整镜像迁移请用命令行 -AllCache</div>
+    </div>`;
+  }
+  if (cmd.migrate) {
+    const savedReg = localStorage.getItem('verdaccio-migrate-registry') || '';
+    fields += field('目标 Registry URL', `
+      id="f-registry" value="${escAttr(savedReg)}" placeholder="http://192.168.1.10:4873"
+      autocomplete="off" spellcheck="false"`,
+      '另一台 Verdaccio / Nexus / npmjs 等任意 npm Registry');
+    fields += field('认证 Token(可选)', `
+      id="f-token" type="password" autocomplete="off"`,
+      '目标 Registry 的 npm token;留空则使用本机 npm 对该 Registry 的登录状态(npm login)。npmjs 开了 2FA 请改用 Automation Token');
+    fields += `<div class="field">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="f-dryrun" style="width:auto;margin:0">
+        仅预览(DryRun),不实际发布
+      </label>
+    </div>`;
+  }
+  if (cmd.export) {
+    fields += field('导出目录', `
+      id="f-out" placeholder="留空自动生成: 脚本目录\\package-export\\<时间戳>"
+      autocomplete="off" spellcheck="false"`,
+      '导出内容包含 tarball、校验清单(manifest.json)、导入脚本与使用说明');
+    fields += `<div class="field">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="f-zip" style="width:auto;margin:0">
+        同时打包成单个 zip(便于 U 盘 / 传输)
+      </label>
+    </div>
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="f-dryrun" style="width:auto;margin:0">
+        仅预览(DryRun),不实际导出
+      </label>
+    </div>`;
+  }
+  if (cmd.import) {
+    fields += field('迁移包路径(导出的目录或 zip)', `
+      id="f-bundle" placeholder="D:\\mig-bundle 或 D:\\mig-bundle.zip"
+      autocomplete="off" spellcheck="false"`,
+      'export-packages.ps1 的产物,含 manifest.json 的目录或 zip');
+    fields += `<div class="field">
+      <label>导入方式</label>
+      <select id="f-import-mode">
+        <option value="registry">发布到 npm Registry(通用,需 npm)</option>
+        <option value="storage">复制进 Verdaccio storage(需停止目标)</option>
+      </select>
+    </div>
+    <div class="field" id="f-import-registry-field">
+      <label>目标 Registry URL</label>
+      <input id="f-registry" placeholder="http://192.168.1.10:4873"
+        autocomplete="off" spellcheck="false">
+      <div class="hint">逐版本 npm publish,目标已有的同名同版本自动跳过</div>
+    </div>
+    <div class="field hidden" id="f-import-storage-field">
+      <label>目标 Verdaccio storage 目录</label>
+      <input id="f-storage" placeholder="D:\\verdaccio\\storage"
+        autocomplete="off" spellcheck="false">
+      <div class="hint">直接复制并写入 DB 列表(保留发布时间);执行前自动备份目标 DB,需先停止目标 Verdaccio</div>
+    </div>`;
+    fields += field('认证 Token(可选,发布模式)', `
+      id="f-token" type="password" autocomplete="off"`,
+      '目标 Registry 的 npm token;留空则使用本机 npm 登录状态');
+    fields += `<div class="field">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="f-dryrun" style="width:auto;margin:0">
+        仅预览(DryRun),不实际导入
+      </label>
+    </div>`;
+  }
+  if (cmd.listFile) {
+    const saved = localStorage.getItem('verdaccio-list-file') || '';
+    fields += field('包列表文件(JSON / 文本)', `
+      id="f-listfile" value="${escAttr(saved)}" placeholder="D:\\pkg-list.json"
+      autocomplete="off" spellcheck="false"`,
+      '支持导出的三种 JSON(包名数组 / packages 键 / 完整版)或每行一个包名的文本文件;name@version 条目按整个包删除');
+    fields += `<div class="field">
+      <label>将删除以下包:</label>
+      <div class="scope-preview" id="listPreview">输入文件路径后自动读取预览</div>
+    </div>
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="f-dryrun" style="width:auto;margin:0">
+        仅预览(DryRun),不实际删除
+      </label>
+    </div>`;
+  }
   if (cmd.login || cmd.register) {
     fields += field('用户名 Username', 'id="f-user" autocomplete="off" spellcheck="false"');
     fields += field('密码 Password', 'id="f-pass" type="password" autocomplete="off"');
@@ -635,21 +765,82 @@ function openModal(cmd, preset = {}) {
 
   const runBtn = $('#modalRun');
   runBtn.classList.toggle('danger', !!cmd.danger);
-  runBtn.disabled = !!cmd.confirm; // 需要确认词时先禁用
   runBtn.textContent = cmd.danger ? '确认执行' : '运行';
 
+  // 确认词逻辑:勾选「仅预览」时无需确认词,其余情况需完整输入确认词才可执行
   const confirmInput = $('#f-confirm');
-  if (confirmInput) {
-    confirmInput.addEventListener('input', () => {
-      runBtn.disabled = confirmInput.value.trim() !== cmd.confirm;
-    });
-  }
+  const dryrunInput = $('#f-dryrun');
+  const syncRunBtn = () => {
+    const dry = !!(dryrunInput && dryrunInput.checked);
+    const needConfirm = !!cmd.confirm && !dry;
+    runBtn.disabled = needConfirm && (!confirmInput || confirmInput.value.trim() !== cmd.confirm);
+    if (confirmInput) {
+      confirmInput.closest('.field').classList.toggle('hidden', dry);
+    }
+  };
+  if (confirmInput) confirmInput.addEventListener('input', syncRunBtn);
+  if (dryrunInput) dryrunInput.addEventListener('change', syncRunBtn);
+  syncRunBtn();
 
   // 预填
   if (preset.package && $('#f-package')) $('#f-package').value = preset.package;
   if ($('#f-scope')) {
     updateScopePreview();
     $('#f-scope').addEventListener('change', updateScopePreview);
+  }
+  if (cmd.migrate || cmd.export) {
+    const modeSel = $('#f-migrate-mode');
+    const syncMode = () => {
+      const m = modeSel.value;
+      $('#f-migrate-scope-field').classList.toggle('hidden', m !== 'scope');
+      $('#f-migrate-pkgs-field').classList.toggle('hidden', m !== 'packages');
+    };
+    modeSel.addEventListener('change', syncMode);
+    syncMode();
+  }
+  if (cmd.import) {
+    const modeSel = $('#f-import-mode');
+    const syncMode = () => {
+      const m = modeSel.value;
+      $('#f-import-registry-field').classList.toggle('hidden', m !== 'registry');
+      $('#f-import-storage-field').classList.toggle('hidden', m !== 'storage');
+    };
+    modeSel.addEventListener('change', syncMode);
+    syncMode();
+  }
+  if (cmd.listFile) {
+    const input = $('#f-listfile');
+    let timer = null;
+    const loadListPreview = async () => {
+      const p = input.value.trim();
+      const box = $('#listPreview');
+      if (!p) {
+        box.textContent = '输入文件路径后自动读取预览';
+        return;
+      }
+      box.textContent = '读取中…';
+      try {
+        const r = await fetch('/api/list-preview?path=' + encodeURIComponent(p));
+        const d = await r.json();
+        if (!r.ok) {
+          box.textContent = '✖ ' + (d.error || 'HTTP ' + r.status);
+          return;
+        }
+        let text = d.packages.length ? d.packages.join('\n') : '(列表为空)';
+        if (d.invalid && d.invalid.length) {
+          text += '\n\n⚠ 无效条目 ' + d.invalid.length + ' 个(执行会失败):\n' + d.invalid.join('\n');
+        }
+        text += '\n\n共 ' + d.count + ' 个包';
+        box.textContent = text;
+      } catch (e) {
+        box.textContent = '✖ 预览失败: ' + e.message;
+      }
+    };
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(loadListPreview, 400);
+    });
+    if (input.value.trim()) loadListPreview();
   }
 
   $('#overlay').classList.remove('hidden');
@@ -704,15 +895,79 @@ $('#modalRun').addEventListener('click', () => {
   if (cmd.param === 'scope') {
     payload.scope = $('#f-scope').value;
   }
-  if (cmd.confirm) {
-    payload.stdin = $('#f-confirm').value.trim();
+  if (cmd.migrate || cmd.export) {
+    const mode = $('#f-migrate-mode').value;
+    if (mode === 'scope') {
+      const s = $('#f-scope').value;
+      if (!s) { alert('没有可选的 Scope(数据库中没有带 scope 的包)'); return; }
+      payload.scope = s;
+    } else if (mode === 'packages') {
+      const names = $('#f-migrate-pkgs').value.trim();
+      if (!names) { $('#f-migrate-pkgs').focus(); return; }
+      payload.packages = names;
+    }
+    if ($('#f-include-cache').checked) payload.includeCache = true;
+    if ($('#f-dryrun').checked) payload.dryRun = true;
   }
-  if (cmd.login || cmd.register) {
-    const user = $('#f-user').value;
-    const pass = $('#f-pass').value;
-    const email = $('#f-email').value;
-    if (!user || !pass) { $('#f-user').focus(); return; }
-    payload.stdin = [user, pass, email || 'nobody@localhost'].join('\n');
+  if (cmd.migrate) {
+    const reg = $('#f-registry').value.trim();
+    if (!/^https?:\/\//i.test(reg)) { $('#f-registry').focus(); return; }
+    payload.registry = reg;
+    localStorage.setItem('verdaccio-migrate-registry', reg);
+
+    // stdin 协议:第 1 行 token(可空),第 2 行确认词(预览时不需要)
+    const token = $('#f-token').value;
+    payload.stdin = payload.dryRun
+      ? token
+      : [token, $('#f-confirm').value.trim()].join('\n');
+  }
+  if (cmd.export) {
+    const out = $('#f-out').value.trim();
+    if (out) payload.out = out;
+    if ($('#f-zip').checked) payload.zip = true;
+  }
+  if (cmd.import) {
+    const bundle = $('#f-bundle').value.trim();
+    if (!bundle) { $('#f-bundle').focus(); return; }
+    payload.bundle = bundle;
+
+    const mode = $('#f-import-mode').value;
+    if (mode === 'registry') {
+      const reg = $('#f-registry').value.trim();
+      if (!/^https?:\/\//i.test(reg)) { $('#f-registry').focus(); return; }
+      payload.registry = reg;
+      localStorage.setItem('verdaccio-migrate-registry', reg);
+    } else {
+      const st = $('#f-storage').value.trim();
+      if (!st) { $('#f-storage').focus(); return; }
+      payload.storage = st;
+    }
+    if ($('#f-dryrun').checked) payload.dryRun = true;
+
+    // stdin 协议:第 1 行 token(可空),第 2 行确认词(预览时不需要)
+    const token = $('#f-token').value;
+    payload.stdin = payload.dryRun
+      ? token
+      : [token, $('#f-confirm').value.trim()].join('\n');
+  }
+  if (cmd.listFile) {
+    const f = $('#f-listfile').value.trim();
+    if (!f) { $('#f-listfile').focus(); return; }
+    payload.listfile = f;
+    localStorage.setItem('verdaccio-list-file', f);
+    if ($('#f-dryrun').checked) payload.dryRun = true;
+  }
+  if (!cmd.migrate && !cmd.export && !cmd.import) {
+    if (cmd.confirm) {
+      payload.stdin = $('#f-confirm').value.trim();
+    }
+    if (cmd.login || cmd.register) {
+      const user = $('#f-user').value;
+      const pass = $('#f-pass').value;
+      const email = $('#f-email').value;
+      if (!user || !pass) { $('#f-user').focus(); return; }
+      payload.stdin = [user, pass, email || 'nobody@localhost'].join('\n');
+    }
   }
 
   closeModal();
@@ -911,9 +1166,46 @@ function renderBrowser() {
   });
 }
 
+// 导出包列表为 JSON 文件(不受当前搜索 / 筛选影响)
+// mode: 'rich' 完整版 | 'names' 简洁版包名 | 'specs' 简洁版包名@版本
+async function exportPackages(mode) {
+  try {
+    const fmt = mode === 'rich' ? '' : '?format=' + mode;
+    const r = await fetch('/api/packages/export' + fmt);
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      alert(e.error || '导出失败: HTTP ' + r.status);
+      return;
+    }
+    const blob = await r.blob();
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const ts =
+      d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) +
+      '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+    const prefix =
+      mode === 'specs' ? 'verdaccio-package-specs-'
+      : mode === 'names' ? 'verdaccio-package-names-'
+      : 'verdaccio-packages-';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = prefix + ts + '.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+  } catch (e) {
+    alert('导出失败: ' + e.message);
+  }
+}
+
 $('#browserSearch').addEventListener('input', renderBrowser);
 $('#browserScope').addEventListener('change', renderBrowser);
 $('#browserRefresh').addEventListener('click', loadBrowser);
+$('#browserExport').addEventListener('click', () => exportPackages('rich'));
+$('#browserExportNames').addEventListener('click', () =>
+  exportPackages($('#browserExportWithVersion').checked ? 'specs' : 'names')
+);
 $('#browserClose').addEventListener('click', closeBrowser);
 
 // ---------------------------------------------------------------------------

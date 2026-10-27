@@ -79,13 +79,13 @@ taskkill /F /IM node.exe
 例如：
 
 ```
-D:\verdaccio\
+C:\lk\01_work\verdaccio\
 ```
 
 里面放：
 
 ```
-D:\verdaccio\
+C:\lk\01_work\verdaccio\
 ├── start.ps1
 ├── stop.ps1
 ├── status.ps1
@@ -109,7 +109,7 @@ D:\verdaccio\
 创建：
 
 ```
-D:\verdaccio\start.ps1
+C:\lk\01_work\verdaccio\start.ps1
 ```
 
 内容：
@@ -138,7 +138,7 @@ verdaccio -c $config
 运行：
 
 ```
-cd D:\verdaccio
+cd C:\lk\01_work\verdaccio
 .\start.ps1
 ```
 
@@ -149,14 +149,14 @@ cd D:\verdaccio
 如果你不想一直占着 PowerShell 窗口：
 
 ```
-D:\verdaccio\start-background.ps1
+C:\lk\01_work\verdaccio\start-background.ps1
 ```
 
 内容：
 
 ```
 $config = "C:\Users\lenovo\.config\verdaccio\config.yaml"
-$logDir = "D:\verdaccio\logs"
+$logDir = "C:\lk\01_work\verdaccio\logs"
 
 if (-not (Test-Path $logDir)) {
     New-Item -ItemType Directory -Path $logDir | Out-Null
@@ -195,7 +195,7 @@ Write-Host "Verdaccio started."
 创建：
 
 ```
-D:\verdaccio\status.ps1
+C:\lk\01_work\verdaccio\status.ps1
 ```
 
 内容：
@@ -264,7 +264,7 @@ taskkill /F /IM node.exe
 创建：
 
 ```
-D:\verdaccio\stop.ps1
+C:\lk\01_work\verdaccio\stop.ps1
 Write-Host "========================================"
 Write-Host " Stopping Verdaccio"
 Write-Host "========================================"
@@ -317,11 +317,11 @@ Write-Host "Verdaccio stopped."
 创建：
 
 ```
-D:\verdaccio\backup-db.ps1
+C:\lk\01_work\verdaccio\backup-db.ps1
 $storage = "C:\Users\lenovo\.config\verdaccio\storage"
 $dbFile = Join-Path $storage ".verdaccio-db.json"
 
-$backupDir = "D:\verdaccio\db-backups"
+$backupDir = "C:\lk\01_work\verdaccio\db-backups"
 
 if (-not (Test-Path $backupDir)) {
     New-Item -ItemType Directory -Path $backupDir | Out-Null
@@ -359,7 +359,7 @@ Write-Host $backupFile
 例如：
 
 ```
-D:\verdaccio\db-backups\
+C:\lk\01_work\verdaccio\db-backups\
 └── .verdaccio-db-20260920-163500.json
 ```
 
@@ -372,7 +372,7 @@ D:\verdaccio\db-backups\
 创建：
 
 ```
-D:\verdaccio\check-db.ps1
+C:\lk\01_work\verdaccio\check-db.ps1
 $storage = "C:\Users\lenovo\.config\verdaccio\storage"
 $dbFile = Join-Path $storage ".verdaccio-db.json"
 
@@ -468,11 +468,11 @@ REMOVE: @szew/units-schema
 创建：
 
 ```
-D:\verdaccio\clean-db.ps1
+C:\lk\01_work\verdaccio\clean-db.ps1
 $storage = "C:\Users\lenovo\.config\verdaccio\storage"
 $dbFile = Join-Path $storage ".verdaccio-db.json"
 
-$backupDir = "D:\verdaccio\db-backups"
+$backupDir = "C:\lk\01_work\verdaccio\db-backups"
 
 Write-Host "========================================"
 Write-Host " Verdaccio DB Cleanup"
@@ -692,7 +692,7 @@ npm --registry http://localhost:4873 view @szewtwin/core-backend
 以后基本不用记一堆命令了：
 
 ```
-D:\verdaccio\
+C:\lk\01_work\verdaccio\
 │
 ├── start.ps1             ← 前台启动
 ├── start-background.ps1  ← 后台启动
