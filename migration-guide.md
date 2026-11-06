@@ -142,6 +142,28 @@ verdaccio-export-<时间戳>/
 内网机器只需要 **PowerShell** + 迁移包(里面自带 `import-packages.ps1`)。
 两种模式二选一:
 
+**批量导入**:`-Bundle` 可一次给出多个迁移包(`|` 或换行分隔),也可以直接
+指向包含多个迁移包的上级目录(如 `package-export`),脚本会自动发现其中的
+子目录与 zip,一次校验、一次确认后全部导入;目录与同名 zip 同时存在时只导入
+目录,避免重复。
+
+```powershell
+# 多个迁移包
+.\import-packages.ps1 -Bundle "D:\mig-a.zip|D:\mig-b.zip" -Registry http://10.0.0.5:4873
+
+# 导出根目录(包含多个时间戳迁移包)
+.\import-packages.ps1 -Bundle D:\package-export -Registry http://10.0.0.5:4873
+```
+
+Web 控制台的导入弹窗同样支持**每行一个路径**(或直接填上级目录),并会记住
+上一次输入的路径、目标 Registry URL 与 storage 路径。导入前点「查看包列表」
+可预览迁移包中的包与版本(直接读 manifest,zip 无需解压);执行后日志区顶部
+会显示逐包结果(成功 / 跳过 / 部分失败 / 失败)及汇总。每次导入的包列表与结果
+会记录在工具箱目录的 `import-history.json`(仅记录 Web 控制台发起的导入);
+「包管理」组的 **「🗂️ 导入包列表」** 可独立查看所有导入过的包(按包名聚合
+版本、可搜索、按状态筛选、可清空记录),导入弹窗内也可展开「查看导入记录」
+查看最近 5 次。
+
 **方式 A:发布到内网 npm Registry(通用,需要 npm)**
 
 ```powershell
@@ -173,7 +195,7 @@ verdaccio-export-<时间戳>/
 
 | 参数 | 说明 |
 | --- | --- |
-| `-Bundle <目录或 zip>` | **必填**,迁移包 |
+| `-Bundle <目录或 zip>` | **必填**,迁移包;多个用 `\|` 或换行分隔,也可填包含多个迁移包的上级目录 |
 | `-Registry <url>` | 模式 A:发布到该 Registry |
 | `-Storage <路径>` | 模式 B:复制进该 Verdaccio storage(与 `-Registry` 二选一) |
 | `-Token` / `-Access` | 模式 A 的认证 / 访问级别 |
@@ -235,7 +257,9 @@ scoped 包的发布必须有认证。`npm login --registry <目标>` 或传 `-To
 **Q: name@version 的列表(如包列表导出的 specs)能用于迁移吗?**
 `-Packages` 只接受纯包名(`name@version` 会被当成包名而找不到);迁移以**包**为单位,
 自动包含该包的全部本地版本。「按列表删除包」(`remove-package-list.ps1`)则可以直接
-读 specs 列表(版本号忽略,按整个包删除)。
+读 specs 列表(版本号忽略,按整个包删除);加 `-Registry <url>` 可改为从远程
+Registry 批量删除(`npm unpublish`,可用 `-Token`),Web 控制台「按列表删除包」
+弹窗填写目标 Registry URL 即可。
 
 **Q: 迁移包能直接打开看吗?**
 可以,`manifest.json` 是可读的包清单;`packages/` 下就是每个包的

@@ -1,12 +1,14 @@
 ﻿param(
     [Parameter(Mandatory = $true)]
-    [string]$Bundle,           # 导出目录或 zip(export-packages.ps1 的产物)
+    [string]$Bundle,           # 导出目录 / zip;多个用 "|" 或换行分隔(批量导入)
 
     [string]$Registry = "",    # 模式A:逐版本发布到该 npm Registry(需要 npm)
     [string]$Storage = "",     # 模式B:直接复制进 Verdaccio storage(需要先停止目标)
     [string]$Token = "",       # 模式A 的认证 token(可选)
     [string]$Access = "",      # public / restricted(可选,发往 npmjs 等公共源的 scoped 包需要 public)
-    [switch]$DryRun            # 仅预览,不实际导入
+    [switch]$DryRun,           # 仅预览,不实际导入
+    [switch]$ListOnly,         # 仅列出迁移包内容(JSON),不导入;供 Web 预览
+    [switch]$MachineReadable   # 输出 @@IMPORT_*@@ 结构化结果行,供 Web 解析
 )
 
 # 把 export-packages.ps1 导出的离线迁移包导入内网。本脚本自包含
@@ -20,7 +22,15 @@
 #                    原样保留发布时间;目标上已存在的包按版本增量合并;
 #                    需要先停止目标 Verdaccio,执行前自动备份其 DB)
 #
+# -Bundle 可一次给出多个迁移包("|" 或换行分隔);也可以给一个包含多个迁移包
+# 的上级目录(如 package-export),脚本会自动发现其中所有迁移包(子目录 /
+# .zip),一次校验、一次确认后批量导入。目录与同名 zip 同时存在时只导入目录。
+#
 # 每个 tarball 会按 manifest.json 的 sha1 逐一校验,介质拷贝损坏会被拦截。
+#
+# -ListOnly        只解析迁移包并输出 JSON(不导入、不校验 tarball),供 Web 预览。
+# -MachineReadable 在正常输出中额外打印 @@IMPORT_PLAN/PKG/DONE@@ 结构化行,
+#                  Web 控制台据此展示每个包的导入成功 / 跳过 / 失败。
 #
 # stdin 协议(Web 控制台管道输入时):
 #   第 1 行 = token(可空),第 2 行 = 确认词 IMPORT(仅非 DryRun 时读取)
@@ -32,7 +42,7 @@
 $useRegistry = [bool]$Registry
 $useStorage = [bool]$Storage
 
-if ($useRegistry -eq $useStorage) {
+if (-not $ListOnly -and $useRegistry -eq $useStorage) {
     Write-Host "ERROR: specify exactly one target:"
     Write-Host "  -Registry <url>   publish to an npm registry (needs npm)"
     Write-Host "  -Storage <path>   copy into a Verdaccio storage directory"
@@ -61,77 +71,262 @@ if ($useStorage) {
 }
 
 # ----------------------------------------
-# 1. 打开迁移包:目录直接用,zip 解压到临时目录
+# 1. 解析迁移包路径:目录直接用,zip 解压到临时目录
+#    -Bundle 支持 "|" / 换行分隔的多个路径,也支持包含多个迁移包的上级目录
 # ----------------------------------------
 
 Write-Host "========================================"
 Write-Host " Import Packages (offline migration)"
 Write-Host "========================================"
-Write-Host "Bundle: $Bundle"
 
-$tempDir = $null
-$bundleDir = $null
+$tempDirs = [System.Collections.Generic.List[string]]::new()
 
-if (Test-Path -LiteralPath $Bundle -PathType Container) {
-    $bundleDir = (Resolve-Path -LiteralPath $Bundle).Path
-}
-elseif (Test-Path -LiteralPath $Bundle -PathType Leaf) {
-    $tempDir = Join-Path `
-        ([System.IO.Path]::GetTempPath()) `
-        ("verdaccio-import-" + [Guid]::NewGuid().ToString("N"))
-    Write-Host "Expanding zip to temp..."
-    try {
-        Expand-Archive `
-            -LiteralPath $Bundle `
-            -DestinationPath $tempDir `
-            -ErrorAction Stop
+function Remove-TempBundles {
+    foreach ($d in $tempDirs) {
+        Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue
     }
-    catch {
-        Write-Host "ERROR: cannot expand zip:"
-        Write-Host $_.Exception.Message
+    $tempDirs.Clear()
+}
+
+function Resolve-BundlePaths([string]$InputText) {
+    $result = [System.Collections.Generic.List[string]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+
+    $add = {
+        param([string]$Path)
+        if ($seen.Add($Path)) { $result.Add($Path) }
+    }
+
+    foreach ($raw in @($InputText -split '[|\r\n]+' | ForEach-Object { $_.Trim().Trim('"') })) {
+        if (-not $raw) { continue }
+
+        if (Test-Path -LiteralPath $raw -PathType Container) {
+            $full = (Resolve-Path -LiteralPath $raw).Path
+            if (Test-Path -LiteralPath (Join-Path $full "manifest.json")) {
+                & $add $full
+                continue
+            }
+
+            # 上级目录(如 package-export):收集其下所有迁移包
+            $found = 0
+            foreach ($d in @(Get-ChildItem -LiteralPath $full -Directory -ErrorAction SilentlyContinue)) {
+                if (Test-Path -LiteralPath (Join-Path $d.FullName "manifest.json")) {
+                    & $add $d.FullName
+                    $found++
+                }
+            }
+            foreach ($z in @(Get-ChildItem -LiteralPath $full -File -Filter "*.zip" -ErrorAction SilentlyContinue)) {
+                # export -Zip 会同时生成 <目录>.zip:目录存在时跳过 zip,避免重复导入
+                $twin = Join-Path $full ([System.IO.Path]::GetFileNameWithoutExtension($z.Name))
+                if (Test-Path -LiteralPath $twin -PathType Container) { continue }
+                & $add $z.FullName
+                $found++
+            }
+            if ($found -eq 0) {
+                Write-Host "ERROR: no exported bundle found in directory:"
+                Write-Host "  $full"
+                Write-Host "Expected subdirectories (or .zip files) containing manifest.json."
+                exit 1
+            }
+            Write-Host "Scanned directory   : $full ($found bundle(s) found)"
+            continue
+        }
+
+        if (Test-Path -LiteralPath $raw -PathType Leaf) {
+            & $add ((Resolve-Path -LiteralPath $raw).Path)
+            continue
+        }
+
+        Write-Host "ERROR: bundle not found (need an export directory or .zip):"
+        Write-Host "  $raw"
         exit 1
     }
-    $bundleDir = $tempDir
+
+    return $result
 }
-else {
-    Write-Host "ERROR: bundle not found (need an export directory or .zip):"
-    Write-Host "  $Bundle"
+
+$bundlePaths = Resolve-BundlePaths "$Bundle"
+
+if ($bundlePaths.Count -eq 0) {
+    Write-Host "ERROR: no bundle path provided."
     exit 1
 }
 
-$manifestPath = Join-Path $bundleDir "manifest.json"
-if (-not (Test-Path -LiteralPath $manifestPath)) {
-    Write-Host "ERROR: manifest.json not found in bundle:"
-    Write-Host $bundleDir
-    if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+Write-Host "Bundles to import   : $($bundlePaths.Count)"
+Write-Host ""
+
+# ----------------------------------------
+# 1b. 逐个打开迁移包并读取 manifest
+# ----------------------------------------
+
+$bundleEntries = [System.Collections.Generic.List[object]]::new()
+
+# -ListOnly 预览时直接从 zip 读取 manifest.json,避免为大包做无谓的解压
+function Read-ManifestFromZip([string]$ZipPath) {
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+    }
+    catch {}
+
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $entry = $zip.Entries |
+            Where-Object { $_.FullName -eq "manifest.json" } |
+            Select-Object -First 1
+        if (-not $entry) { throw "manifest.json not found in zip" }
+
+        $reader = [System.IO.StreamReader]::new(
+            $entry.Open(), [System.Text.Encoding]::UTF8)
+        try { $text = $reader.ReadToEnd() }
+        finally { $reader.Dispose() }
+        return ($text | ConvertFrom-Json)
+    }
+    finally { $zip.Dispose() }
+}
+
+foreach ($bp in $bundlePaths) {
+    $bundleDir = $null
+    $manifest = $null
+
+    if (Test-Path -LiteralPath $bp -PathType Container) {
+        $bundleDir = (Resolve-Path -LiteralPath $bp).Path
+        $manifestPath = Join-Path $bundleDir "manifest.json"
+        if (-not (Test-Path -LiteralPath $manifestPath)) {
+            Write-Host "ERROR: manifest.json not found in bundle:"
+            Write-Host $bp
+            Remove-TempBundles
+            exit 1
+        }
+
+        try {
+            $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+        }
+        catch {
+            Write-Host "ERROR: manifest.json is corrupted / not valid JSON:"
+            Write-Host $bp
+            Remove-TempBundles
+            exit 1
+        }
+    }
+    elseif ($ListOnly) {
+        try {
+            $manifest = Read-ManifestFromZip $bp
+        }
+        catch {
+            Write-Host "ERROR: cannot read manifest.json from zip:"
+            Write-Host $bp
+            Write-Host $_.Exception.Message
+            exit 1
+        }
+    }
+    else {
+        $tempDir = Join-Path `
+            ([System.IO.Path]::GetTempPath()) `
+            ("verdaccio-import-" + [Guid]::NewGuid().ToString("N"))
+        Write-Host "Expanding zip to temp: $bp"
+        try {
+            Expand-Archive `
+                -LiteralPath $bp `
+                -DestinationPath $tempDir `
+                -ErrorAction Stop
+        }
+        catch {
+            Write-Host "ERROR: cannot expand zip:"
+            Write-Host $bp
+            Write-Host $_.Exception.Message
+            Remove-TempBundles
+            exit 1
+        }
+        $tempDirs.Add($tempDir)
+        $bundleDir = $tempDir
+
+        $manifestPath = Join-Path $bundleDir "manifest.json"
+        if (-not (Test-Path -LiteralPath $manifestPath)) {
+            Write-Host "ERROR: manifest.json not found in bundle:"
+            Write-Host $bp
+            Remove-TempBundles
+            exit 1
+        }
+
+        try {
+            $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+        }
+        catch {
+            Write-Host "ERROR: manifest.json is corrupted / not valid JSON:"
+            Write-Host $bp
+            Remove-TempBundles
+            exit 1
+        }
+    }
+
+    if ("$($manifest.format)" -notlike "verdaccio-export/*") {
+        Write-Host "ERROR: unknown manifest format in '$bp': $($manifest.format)"
+        Remove-TempBundles
+        exit 1
+    }
+
+    $pkgs = @($manifest.packages)
+    if ($pkgs.Count -eq 0) {
+        Write-Host "WARN: bundle contains no packages, skipped: $bp"
+        continue
+    }
+
+    Write-Host ("Bundle {0}  {1}" -f ($bundleEntries.Count + 1), $bp)
+    Write-Host ("  Created: {0}   Packages: {1}" -f $manifest.created, $pkgs.Count)
+
+    $bundleEntries.Add([pscustomobject]@{
+        Dir      = $bundleDir
+        Path     = $bp
+        Created  = "$($manifest.created)"
+        Packages = $pkgs
+    })
+}
+
+if ($bundleEntries.Count -eq 0) {
+    Write-Host "ERROR: no importable packages in the given bundle(s)."
+    Remove-TempBundles
     exit 1
 }
 
-try {
-    $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
-}
-catch {
-    Write-Host "ERROR: manifest.json is corrupted / not valid JSON."
-    if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
-    exit 1
+# -ListOnly:输出机器可读的迁移包内容(Web 预览),不读取 token、不校验 tarball
+if ($ListOnly) {
+    $infoBundles = @($bundleEntries | ForEach-Object {
+        [pscustomobject]@{
+            path     = "$($_.Path)"
+            created  = "$($_.Created)"
+            packages = @($_.Packages | ForEach-Object {
+                [pscustomobject]@{
+                    name            = "$($_.name)"
+                    versions        = @($_.versions | ForEach-Object { "$($_.version)" })
+                    missingTarballs = @($_.missingTarballs)
+                }
+            })
+        }
+    })
+
+    $totalPackages = 0
+    $totalVersions = 0
+    foreach ($b in $infoBundles) {
+        foreach ($p in @($b.packages)) {
+            $totalPackages++
+            $totalVersions += @($p.versions).Count
+        }
+    }
+
+    $info = [pscustomobject]@{
+        bundles       = $infoBundles
+        totalBundles  = $infoBundles.Count
+        totalPackages = $totalPackages
+        totalVersions = $totalVersions
+    }
+
+    Write-Host "@@BUNDLE_INFO_BEGIN@@"
+    Write-Host ($info | ConvertTo-Json -Compress -Depth 100)
+    Write-Host "@@BUNDLE_INFO_END@@"
+    exit 0
 }
 
-if ("$($manifest.format)" -notlike "verdaccio-export/*") {
-    Write-Host "ERROR: unknown manifest format: $($manifest.format)"
-    if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
-    exit 1
-}
-
-$bundlePackages = @($manifest.packages)
-
-if ($bundlePackages.Count -eq 0) {
-    Write-Host "ERROR: bundle contains no packages."
-    if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
-    exit 1
-}
-
-Write-Host "Created: $($manifest.created)"
-Write-Host "Packages in bundle: $($bundlePackages.Count)"
 Write-Host ""
 
 # 读取 token(stdin 第 1 行是 token 槽位,无论是否用参数提供都要对齐协议)
@@ -162,49 +357,54 @@ $plans = [System.Collections.Generic.List[object]]::new()
 $corrupt = [System.Collections.Generic.List[string]]::new()
 $missingFiles = [System.Collections.Generic.List[string]]::new()
 
-foreach ($pkg in $bundlePackages) {
-    $versions = [System.Collections.Generic.List[object]]::new()
+foreach ($entry in $bundleEntries) {
+    $bundleDir = $entry.Dir
 
-    foreach ($v in @($pkg.versions)) {
-        $fileRel = "$($v.file)"
-        $fileAbs = Join-Path $bundleDir ($fileRel -replace "/", "\")
+    foreach ($pkg in $entry.Packages) {
+        $versions = [System.Collections.Generic.List[object]]::new()
 
-        if (-not (Test-Path -LiteralPath $fileAbs)) {
-            $missingFiles.Add("$($pkg.name)@$($v.version)  ($fileRel)")
-            continue
+        foreach ($v in @($pkg.versions)) {
+            $fileRel = "$($v.file)"
+            $fileAbs = Join-Path $bundleDir ($fileRel -replace "/", "\")
+
+            if (-not (Test-Path -LiteralPath $fileAbs)) {
+                $missingFiles.Add("$($pkg.name)@$($v.version)  ($fileRel)")
+                continue
+            }
+
+            $shasum = Get-FileShasum $fileAbs
+            if ("$($v.shasum)" -and $shasum -ne "$($v.shasum)") {
+                $corrupt.Add("$($pkg.name)@$($v.version)  sha1 mismatch ($fileRel)")
+                continue
+            }
+
+            $versions.Add([pscustomobject]@{
+                Ver     = "$($v.version)"
+                FileRel = $fileRel
+                FileAbs = $fileAbs
+                Size    = [long]$v.size
+            })
         }
 
-        $shasum = Get-FileShasum $fileAbs
-        if ("$($v.shasum)" -and $shasum -ne "$($v.shasum)") {
-            $corrupt.Add("$($pkg.name)@$($v.version)  sha1 mismatch ($fileRel)")
-            continue
-        }
+        $pkgDirAbs = Join-Path $bundleDir ("packages\" + ("$($pkg.name)" -replace "/", "\"))
 
-        $versions.Add([pscustomobject]@{
-            Ver     = "$($v.version)"
-            FileRel = $fileRel
-            FileAbs = $fileAbs
-            Size    = [long]$v.size
+        $plans.Add([pscustomobject]@{
+            Name     = "$($pkg.name)"
+            Versions = $versions
+            Tags     = $pkg.distTags
+            PkgDirAbs = $pkgDirAbs
+            # bundle 里的 packument 原文(-Storage 合并模式用)
+            PackumentPath = Join-Path $pkgDirAbs "package.json"
+            MissingTarballs = @($pkg.missingTarballs)
         })
     }
-
-    $plans.Add([pscustomobject]@{
-        Name     = "$($pkg.name)"
-        Versions = $versions
-        Tags     = $pkg.distTags
-        # bundle 里的 packument 原文(-Storage 合并模式用)
-        PackumentPath = Join-Path `
-            (Join-Path $bundleDir ("packages\" + ("$($pkg.name)" -replace "/", "\"))) `
-            "package.json"
-        MissingTarballs = @($pkg.missingTarballs)
-    })
 }
 
 if ($missingFiles.Count -gt 0) {
     Write-Host "ERROR: $($missingFiles.Count) tarball(s) listed in manifest are missing:"
     foreach ($x in $missingFiles) { Write-Host "  $x" }
     Write-Host "The bundle is incomplete. Re-export or re-copy it."
-    if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+    Remove-TempBundles
     exit 1
 }
 
@@ -212,7 +412,7 @@ if ($corrupt.Count -gt 0) {
     Write-Host "ERROR: $($corrupt.Count) tarball(s) FAILED checksum verification:"
     foreach ($x in $corrupt) { Write-Host "  $x" }
     Write-Host "The bundle was corrupted during copy / transfer. Re-export it."
-    if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+    Remove-TempBundles
     exit 1
 }
 
@@ -256,9 +456,20 @@ foreach ($plan in $plans) {
 }
 Write-Host ""
 
+# Web 控制台:先登记所有待导入的包,结果行随后逐个更新
+if ($MachineReadable) {
+    foreach ($plan in $plans) {
+        $verList = @($plan.Versions | ForEach-Object { $_.Ver })
+        Write-Host ("@@IMPORT_PLAN@@" + (@{
+            name     = $plan.Name
+            versions = $verList
+        } | ConvertTo-Json -Compress -Depth 10))
+    }
+}
+
 if ($DryRun) {
     Write-Host "[DryRun] Nothing imported."
-    if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+    Remove-TempBundles
     exit 0
 }
 
@@ -276,7 +487,7 @@ else {
 
 if ("$answer".Trim() -ne "IMPORT") {
     Write-Host "Cancelled."
-    if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+    Remove-TempBundles
     exit 0
 }
 
@@ -289,7 +500,7 @@ if ($useRegistry) {
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
         Write-Host "ERROR: npm not found in PATH (required for -Registry mode)."
         Write-Host "Use -Storage mode instead if the target is a Verdaccio."
-        if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+        Remove-TempBundles
         exit 1
     }
 
@@ -347,7 +558,7 @@ if ($useRegistry) {
         Write-Host $Registry
         if ($ping.Output) { Write-Host $ping.Output }
         if ($tempNpmrc -and (Test-Path $tempNpmrc)) { Remove-Item -LiteralPath $tempNpmrc -Force -ErrorAction SilentlyContinue }
-        if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+        Remove-TempBundles
         exit 1
     }
 
@@ -388,6 +599,11 @@ if ($useRegistry) {
         Write-Host ""
         Write-Host "[$pkgIndex/$($plans.Count)] $($plan.Name)  ($($plan.Versions.Count) version(s))"
 
+        $pkgPublished = 0
+        $pkgSkipped = 0
+        $pkgFailed = 0
+        $pkgTagFailed = 0
+
         foreach ($v in $plan.Versions) {
             $label = "$($plan.Name)@$($v.Ver)"
 
@@ -399,24 +615,36 @@ if ($useRegistry) {
             if ($result.Code -eq 0) {
                 Write-Host "  + $label"
                 $published++
+                $pkgPublished++
                 [void]$okVersions.Add($v.Ver)
             }
             elseif (Test-AlreadyPublished $result.Output) {
                 Write-Host "  = $label (already on target, skipped)"
                 $skipped++
+                $pkgSkipped++
                 [void]$okVersions.Add($v.Ver)
             }
             elseif ($result.Output -match 'E401|401 Unauthorized|ENEEDAUTH') {
                 Write-Host "  ! $label AUTH FAILED - aborting import"
                 if ($result.Output) { Write-Host $result.Output }
+                # 中断前也记录本次失败,便于 Web 端「导入包列表」查看
+                if ($MachineReadable) {
+                    Write-Host ("@@IMPORT_PKG@@" + (@{
+                        name     = $plan.Name
+                        versions = @($plan.Versions | ForEach-Object { $_.Ver })
+                        status   = "failed"
+                        detail   = "auth failed"
+                    } | ConvertTo-Json -Compress -Depth 10))
+                }
                 if ($tempNpmrc -and (Test-Path $tempNpmrc)) { Remove-Item -LiteralPath $tempNpmrc -Force -ErrorAction SilentlyContinue }
-                if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+                Remove-TempBundles
                 exit 1
             }
             else {
                 Write-Host "  ! $label FAILED"
                 if ($result.Output) { Write-Host $result.Output }
                 $failed++
+                $pkgFailed++
                 $failedList.Add($label)
             }
         }
@@ -440,7 +668,31 @@ if ($useRegistry) {
                 Write-Host "  tag $tag -> $ver FAILED"
                 if ($r.Output) { Write-Host $r.Output }
                 $tagFailed++
+                $pkgTagFailed++
             }
+        }
+
+        if ($MachineReadable) {
+            $pkgStatus = "ok"
+            if ($pkgFailed -gt 0) {
+                $pkgStatus = if (($pkgPublished + $pkgSkipped) -gt 0) { "partial" } else { "failed" }
+            }
+            elseif ($pkgPublished -eq 0) {
+                $pkgStatus = "skipped"
+            }
+
+            $detail = "published $pkgPublished, skipped $pkgSkipped, failed $pkgFailed"
+            if ($pkgTagFailed -gt 0) { $detail += ", tags failed $pkgTagFailed" }
+
+            Write-Host ("@@IMPORT_PKG@@" + (@{
+                name      = $plan.Name
+                versions  = @($plan.Versions | ForEach-Object { $_.Ver })
+                status    = $pkgStatus
+                detail    = $detail
+                published = $pkgPublished
+                skipped   = $pkgSkipped
+                failed    = $pkgFailed
+            } | ConvertTo-Json -Compress -Depth 10))
         }
     }
 
@@ -470,7 +722,18 @@ if ($useRegistry) {
     Write-Host "Verify on the target with:"
     Write-Host "  npm view <package> --registry $Registry"
 
-    if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($MachineReadable) {
+        Write-Host ("@@IMPORT_DONE@@" + (@{
+            mode      = "registry"
+            packages  = $plans.Count
+            published = $published
+            skipped   = $skipped
+            failed    = $failed
+            tagsFailed = $tagFailed
+        } | ConvertTo-Json -Compress -Depth 10))
+    }
+
+    Remove-TempBundles
 
     if ($failed -gt 0 -or $tagFailed -gt 0) { exit 1 }
     exit 0
@@ -485,7 +748,7 @@ $dbFile = Join-Path $Storage ".verdaccio-db.json"
 if (-not (Test-Path -LiteralPath $dbFile)) {
     Write-Host "ERROR: not a Verdaccio storage directory (.verdaccio-db.json missing):"
     Write-Host $Storage
-    if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+    Remove-TempBundles
     exit 1
 }
 
@@ -496,14 +759,14 @@ catch {
     Write-Host "ERROR: target DB is corrupted / not valid JSON:"
     Write-Host $dbFile
     Write-Host "Nothing was imported."
-    if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+    Remove-TempBundles
     exit 1
 }
 
 if ($null -eq $db -or [string]::IsNullOrWhiteSpace("$($db.secret)")) {
     Write-Host "ERROR: target DB is empty or the secret is missing."
     Write-Host "Nothing was imported."
-    if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+    Remove-TempBundles
     exit 1
 }
 
@@ -547,7 +810,7 @@ foreach ($running in Get-RunningVerdaccioStorages) {
         Write-Host "ERROR: a running Verdaccio is using this storage:"
         Write-Host $targetStorageFull
         Write-Host "Stop it first, then run the import again."
-        if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+        Remove-TempBundles
         exit 1
     }
 }
@@ -570,7 +833,7 @@ function Copy-IntoStorage {
 
     $name = $Plan.Name
     $dstDir = Join-Path $Storage ($name -replace "/", "\")
-    $bundlePkgDir = Join-Path $bundleDir ("packages\" + ($name -replace "/", "\"))
+    $bundlePkgDir = $Plan.PkgDirAbs
 
     if (-not (Test-Path -LiteralPath $dstDir)) {
         # 全新包:整个目录复制(packument + 全部 tarball)
@@ -604,7 +867,7 @@ function Copy-IntoStorage {
     foreach ($v in $Plan.Versions) {
         if ($t.versions.PSObject.Properties[$v.Ver]) { continue }
 
-        $srcFile = Join-Path $bundleDir ($v.FileRel -replace "/", "\")
+        $srcFile = $v.FileAbs
         Copy-Item -LiteralPath $srcFile -Destination (Join-Path $dstDir (Split-Path -Leaf $srcFile)) -Force
 
         $bVer = $b.versions.PSObject.Properties[$v.Ver].Value
@@ -662,11 +925,28 @@ $pkgIndex = 0
 foreach ($plan in $plans) {
     $pkgIndex++
     Write-Host "[$pkgIndex/$($plans.Count)] $($plan.Name)"
-    switch (Copy-IntoStorage $plan) {
+
+    $pkgResult = Copy-IntoStorage $plan
+    switch ($pkgResult) {
         "copied" { $copied++ }
         "merged" { $merged++ }
         "skipped" { $mergeSkipped++ }
         default { $mergeFailed++ }
+    }
+
+    if ($MachineReadable) {
+        $pkgStatus = switch ($pkgResult) {
+            "copied"  { "ok" }
+            "merged"  { "ok" }
+            "skipped" { "skipped" }
+            default   { "failed" }
+        }
+        Write-Host ("@@IMPORT_PKG@@" + (@{
+            name     = $plan.Name
+            versions = @($plan.Versions | ForEach-Object { $_.Ver })
+            status   = $pkgStatus
+            detail   = $pkgResult
+        } | ConvertTo-Json -Compress -Depth 10))
     }
 }
 
@@ -709,7 +989,18 @@ Write-Host "Start Verdaccio on the target machine to use the packages."
 Write-Host "Note: tarball URLs are rewritten by Verdaccio when serving,"
 Write-Host "so copied packages work regardless of the old source address."
 
-if ($tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+if ($MachineReadable) {
+    Write-Host ("@@IMPORT_DONE@@" + (@{
+        mode     = "storage"
+        packages = $plans.Count
+        copied   = $copied
+        merged   = $merged
+        skipped  = $mergeSkipped
+        failed   = $mergeFailed
+    } | ConvertTo-Json -Compress -Depth 10))
+}
+
+Remove-TempBundles
 
 if ($mergeFailed -gt 0) { exit 1 }
 exit 0

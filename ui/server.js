@@ -22,6 +22,10 @@ const REGISTRY = process.env.REGISTRY || 'http://localhost:4873';
 // 工具箱启动 Verdaccio 时记录所用 config,所有脚本 / API 跟随该记录
 const ACTIVE_CONFIG_FILE = path.join(ROOT, 'active-config.txt');
 
+// 离线导入的持久化记录(服务端保存,不依赖浏览器)
+const IMPORT_HISTORY_FILE = path.join(ROOT, 'import-history.json');
+const IMPORT_HISTORY_LIMIT = 100;
+
 // 允许执行的脚本白名单(相对仓库根目录),防止任意命令执行
 const SCRIPTS = {
   'start':               { file: 'start.ps1' },
@@ -378,6 +382,199 @@ async function handleListPreview(res, filePath) {
 }
 
 // ---------------------------------------------------------------------------
+// API: 迁移包内容预览 —— 调 import-packages.ps1 -ListOnly,读取 manifest.json
+//   列出迁移包中的包与版本(zip 直接读清单,不解压)
+//   POST /api/import-preview { bundles: "path1\npath2" }
+// ---------------------------------------------------------------------------
+
+function runImportPreview(bundles) {
+  return new Promise((resolve) => {
+    const scriptPath = path.join(ROOT, 'import-packages.ps1');
+    const psCommand =
+      "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; " +
+      "try{[Console]::InputEncoding=[System.Text.Encoding]::UTF8}catch{}; " +
+      '& ' + psQuote(scriptPath) +
+      ' -Bundle ' + psQuote(bundles.join('|')) +
+      ' -ListOnly';
+
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCommand],
+      { cwd: ROOT }
+    );
+
+    let out = '';
+    let err = '';
+    let settled = false;
+    const finish = (v) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+    };
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch {}
+      finish({ ok: false, error: '读取迁移包超时' });
+    }, 60 * 1000);
+
+    child.stdout.on('data', (d) => (out += d.toString('utf8')));
+    child.stderr.on('data', (d) => (err += d.toString('utf8')));
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      finish({ ok: false, error: '启动预览失败: ' + e.message });
+    });
+    child.on('close', () => {
+      clearTimeout(timer);
+      const m = out.match(/@@BUNDLE_INFO_BEGIN@@\s*([\s\S]*?)\s*@@BUNDLE_INFO_END@@/);
+      if (!m) {
+        finish({
+          ok: false,
+          error: '无法读取迁移包内容',
+          detail: (err || out).trim().slice(-2000),
+        });
+        return;
+      }
+      try {
+        finish({ ok: true, info: JSON.parse(m[1]) });
+      } catch (e) {
+        finish({ ok: false, error: '迁移包信息解析失败: ' + e.message });
+      }
+    });
+  });
+}
+
+async function handleImportPreview(req, res) {
+  let body;
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch {
+    return json(res, 400, { error: '请求体不是合法 JSON' });
+  }
+
+  const bundles = String(body.bundles || '')
+    .split(/[\r\n|]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!bundles.length) {
+    return json(res, 400, { error: '请填写至少一个迁移包路径' });
+  }
+  for (const b of bundles) {
+    if (!/^[a-zA-Z]:[\\/][^<>:"|?*\r\n]+$/i.test(b)) {
+      return json(res, 400, { error: '迁移包路径不合法(应为绝对路径): ' + b });
+    }
+    if (!fs.existsSync(b)) {
+      return json(res, 400, { error: '迁移包不存在: ' + b });
+    }
+  }
+
+  const r = await runImportPreview(bundles);
+  if (!r.ok) return json(res, 500, { error: r.error, detail: r.detail || '' });
+  json(res, 200, r.info);
+}
+
+// ---------------------------------------------------------------------------
+// API: 导入记录 —— 服务端持久化,供「导入包列表」及导入弹窗查看
+//   GET  /api/import-history          → { records: [...] }(最新在前)
+//   POST /api/import-history/clear    → 清空(需 {confirm:true})
+// ---------------------------------------------------------------------------
+
+function asArray(v) {
+  if (v == null || v === '') return [];
+  return Array.isArray(v) ? v : [v];
+}
+
+function readImportHistory() {
+  try {
+    const list = JSON.parse(fs.readFileSync(IMPORT_HISTORY_FILE, 'utf8'));
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function appendImportHistory(record) {
+  const list = readImportHistory();
+  list.unshift(record);
+  try {
+    fs.writeFileSync(
+      IMPORT_HISTORY_FILE,
+      JSON.stringify(list.slice(0, IMPORT_HISTORY_LIMIT), null, 2),
+      'utf8'
+    );
+  } catch (e) {
+    console.error('导入记录写入失败: ' + e.message);
+  }
+}
+
+// 从脚本输出的 @@IMPORT_*@@ 行还原一次导入的包与结果
+function buildImportRecord(markers, body, exitCode) {
+  const rows = [];
+  let done = null;
+
+  for (const m of markers) {
+    const data = m.data || {};
+    if (m.type === 'PLAN') {
+      rows.push({
+        name: String(data.name || ''),
+        versions: asArray(data.versions).map(String),
+        status: 'pending',
+        detail: '',
+      });
+    } else if (m.type === 'PKG') {
+      const name = String(data.name || '');
+      let row = rows.find((r) => r.name === name && r.status === 'pending');
+      if (!row) {
+        row = { name, versions: [], status: 'pending', detail: '' };
+        rows.push(row);
+      }
+      const vers = asArray(data.versions).map(String);
+      if (vers.length) row.versions = vers;
+      row.status = ['ok', 'partial', 'failed', 'skipped'].includes(data.status)
+        ? data.status
+        : 'ok';
+      row.detail = String(data.detail || '');
+    } else if (m.type === 'DONE') {
+      done = data;
+    }
+  }
+
+  // 没有实际结果(DryRun / 在产生结果前就失败)时不记录
+  if (!done && !rows.some((r) => r.status !== 'pending')) return null;
+
+  return {
+    at: new Date().toISOString(),
+    mode:
+      (done && done.mode) ||
+      (body.storage && !body.registry ? 'storage' : 'registry'),
+    target: body.registry || body.storage || '',
+    bundles: body.bundle || '',
+    completed: !!done,
+    exitCode: typeof exitCode === 'number' ? exitCode : null,
+    summary: done,
+    rows,
+  };
+}
+
+function handleImportHistoryGet(res) {
+  json(res, 200, { records: readImportHistory() });
+}
+
+async function handleImportHistoryClear(req, res) {
+  let body = {};
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch {}
+  if (!body || body.confirm !== true) {
+    return json(res, 400, { error: '需要确认清空导入记录' });
+  }
+  try {
+    fs.writeFileSync(IMPORT_HISTORY_FILE, '[]', 'utf8');
+  } catch (e) {
+    return json(res, 500, { error: '清空失败: ' + e.message });
+  }
+  json(res, 200, { ok: true });
+}
+
+// ---------------------------------------------------------------------------
 // API: 执行脚本(SSE 流式返回输出)
 // ---------------------------------------------------------------------------
 
@@ -423,6 +620,13 @@ async function handleRun(req, res) {
       return json(res, 400, { error: '包列表文件不存在: ' + f });
     }
     args.push('-List', f);
+    const reg = String(body.registry || '').trim().replace(/\/+$/, '');
+    if (reg) {
+      if (!/^https?:\/\/[^\s'"]+$/i.test(reg)) {
+        return json(res, 400, { error: '目标 Registry URL 不合法(需 http(s):// 开头): ' + reg });
+      }
+      args.push('-Registry', reg);
+    }
     if (body.dryRun) args.push('-DryRun');
   }
   if (id === 'start' || id === 'start-background') {
@@ -483,15 +687,30 @@ async function handleRun(req, res) {
     if (body.dryRun) args.push('-DryRun');
   }
   if (id === 'import-packages') {
-    const bundle = String(body.bundle || '').trim();
-    if (!/^[a-zA-Z]:[\\/][^<>:"|?*\r\n]+$/i.test(bundle)) {
-      return json(res, 400, { error: '迁移包路径不合法(应为绝对路径): ' + bundle });
+    // 每行一个路径;也允许填包含多个迁移包的上级目录(脚本会自行发现)
+    const bundles = String(body.bundle || '')
+      .split(/[\r\n|]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!bundles.length) {
+      return json(res, 400, { error: '请填写至少一个迁移包路径' });
     }
-    if (!fs.existsSync(bundle)) {
-      return json(res, 400, { error: '迁移包不存在: ' + bundle });
+    for (const b of bundles) {
+      if (!/^[a-zA-Z]:[\\/][^<>:"|?*\r\n]+$/i.test(b)) {
+        return json(res, 400, { error: '迁移包路径不合法(应为绝对路径): ' + b });
+      }
+      if (!fs.existsSync(b)) {
+        return json(res, 400, { error: '迁移包不存在: ' + b });
+      }
     }
-    args.push('-Bundle', bundle);
-    const mode = String(body.mode || 'registry');
+    // 用 "|" 连接(Windows 路径不允许该字符),脚本按 "|" / 换行拆分
+    args.push('-Bundle', bundles.join('|'));
+    // 输出 @@IMPORT_*@@ 结构化行,Web 控制台据此展示逐包结果
+    args.push('-MachineReadable');
+    // 兼容旧前端(未传 mode):有 storage 且无 registry 时按存储模式处理
+    const mode = String(
+      body.mode || (body.storage && !body.registry ? 'storage' : 'registry')
+    );
     if (mode === 'registry') {
       const reg = String(body.registry || '').trim().replace(/\/+$/, '');
       if (!/^https?:\/\/[^\s'"]+$/i.test(reg)) {
@@ -553,7 +772,32 @@ async function handleRun(req, res) {
   }
   child.stdin.end();
 
-  child.stdout.on('data', (d) => sse({ type: 'out', text: d.toString('utf8') }));
+  // 导入记录:从 stdout 收集 @@IMPORT_*@@ 结构化行(按行缓冲,防止分块截断)
+  const importMarkers = [];
+  let importBuf = '';
+  const collectImportLine = (line) => {
+    const m = line.match(/^@@IMPORT_(PLAN|PKG|DONE)@@(.+)$/);
+    if (!m) return;
+    try {
+      importMarkers.push({ type: m[1], data: JSON.parse(m[2]) });
+    } catch {}
+  };
+  const collectImportText = (text) => {
+    importBuf += text;
+    let idx;
+    while ((idx = importBuf.indexOf('\n')) >= 0) {
+      const line = importBuf.slice(0, idx).replace(/\r$/, '');
+      importBuf = importBuf.slice(idx + 1);
+      collectImportLine(line);
+    }
+    if (importBuf.length > 1024 * 1024) importBuf = '';
+  };
+
+  child.stdout.on('data', (d) => {
+    const text = d.toString('utf8');
+    sse({ type: 'out', text });
+    if (id === 'import-packages') collectImportText(text);
+  });
   child.stderr.on('data', (d) => sse({ type: 'err', text: d.toString('utf8') }));
 
   child.on('error', (err) => {
@@ -577,6 +821,12 @@ async function handleRun(req, res) {
   });
 
   child.on('close', () => {
+    // 所有 stdout 都已关闭,此时保存导入记录最完整
+    if (id === 'import-packages' && !body.dryRun) {
+      if (importBuf.trim()) collectImportLine(importBuf.trim());
+      const record = buildImportRecord(importMarkers, body, child.exitCode);
+      if (record) appendImportHistory(record);
+    }
     try { res.end(); } catch {}
   });
 }
@@ -1020,6 +1270,19 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'POST' && url === '/api/run') {
     handleRun(req, res).catch((e) => json(res, 500, { error: e.message }));
+    return;
+  }
+  if (req.method === 'POST' && url === '/api/import-preview') {
+    handleImportPreview(req, res).catch((e) => json(res, 500, { error: e.message }));
+    return;
+  }
+  if (req.method === 'GET' && url === '/api/import-history') {
+    return handleImportHistoryGet(res);
+  }
+  if (req.method === 'POST' && url === '/api/import-history/clear') {
+    handleImportHistoryClear(req, res).catch((e) =>
+      json(res, 500, { error: e.message })
+    );
     return;
   }
   if (req.method === 'GET' && url === '/api/uplinks') {

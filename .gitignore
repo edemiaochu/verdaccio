@@ -8,6 +8,10 @@ package-export/
 # 工具箱运行时记录的本机状态(上次启动 Verdaccio 使用的 config 路径)
 active-config.txt
 
+# 离线导入记录(运行时数据,含包名 / 目标地址)
+import-history.json
+import-history.json.tmp
+
 # Node
 node_modules/
 npm-debug.log*

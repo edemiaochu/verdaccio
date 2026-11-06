@@ -117,6 +117,7 @@
     transition: border-color .15s, background .15s;
   }
   .btn:hover { border-color: #3d5268; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
   .btn.kill { border-color: rgba(248, 81, 73, .5); color: #ff8b84; }
   .btn.kill:hover { background: rgba(248, 81, 73, .12); }
   .hidden { display: none !important; }
@@ -147,6 +148,37 @@
   }
   .log pre .err-line { color: #ff7b72; }
 
+  /* ---------- 导入结果 ---------- */
+  .import-result {
+    margin: 6px 8px 10px; border: 1px solid var(--border-soft);
+    border-radius: 8px; background: #0d141d; overflow: hidden;
+  }
+  .import-result .ir-head {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    padding: 7px 12px; background: #101722;
+    border-bottom: 1px solid var(--border-soft);
+    font-size: 12px; color: var(--muted);
+  }
+  .import-result .ir-head b { color: var(--text); font-size: 12.5px; }
+  .import-result .ir-body { max-height: 240px; overflow-y: auto; }
+  .ir-row {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 6px 12px; border-bottom: 1px solid var(--border-soft);
+    font-family: var(--mono); font-size: 12px;
+  }
+  .ir-row:last-child { border-bottom: none; }
+  .ir-name { flex: 1; color: #79c0ff; word-break: break-all; }
+  .ir-ver { color: var(--muted); max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ir-status {
+    font-size: 11px; padding: 1px 8px; border-radius: 999px;
+    border: 1px solid; white-space: nowrap;
+  }
+  .ir-status.pending { color: var(--muted); border-color: #33475e; }
+  .ir-status.ok { color: #57d68f; border-color: rgba(63, 185, 80, .45); }
+  .ir-status.partial { color: #e3b341; border-color: rgba(227, 179, 65, .5); }
+  .ir-status.failed { color: #ff8b84; border-color: rgba(248, 81, 73, .5); }
+  .ir-status.skipped { color: var(--muted); border-color: #33475e; }
+
   /* ---------- 弹窗 ---------- */
   .overlay {
     position: fixed; inset: 0; z-index: 50;
@@ -169,14 +201,15 @@
   }
   .field { margin-bottom: 13px; }
   .field label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 5px; }
-  .field input, .field select {
+  .field input, .field select, .field textarea {
     width: 100%; font: inherit; font-size: 13.5px;
     padding: 9px 12px; border-radius: 8px;
     background: #0d141d; border: 1px solid var(--border); color: var(--text);
     outline: none; transition: border-color .15s;
     font-family: var(--mono);
   }
-  .field input:focus, .field select:focus { border-color: var(--blue); }
+  .field textarea { min-height: 72px; resize: vertical; line-height: 1.5; }
+  .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--blue); }
   .field input:invalid { border-color: rgba(248, 81, 73, .6); }
   .modal-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
   .btn-primary {
@@ -236,6 +269,7 @@
     font-family: var(--mono); font-size: 12px; color: #9fb0c3;
     white-space: pre; margin-top: 4px;
   }
+  #bundlePreview { max-height: 220px; }
 
   /* ---------- 远程连接指引 ---------- */
   .net-banner {
@@ -360,6 +394,36 @@
   </div>
 </div>
 
+<!-- 导入包列表弹窗 -->
+<div id="importHistoryOverlay" class="overlay hidden">
+  <div class="modal wide">
+    <h3>🗂️ 导入包列表 <span id="importHistoryCount" class="hint"></span></h3>
+    <div class="browser-controls">
+      <input id="importHistorySearch" placeholder="搜索包名 / 目标…" autocomplete="off" spellcheck="false">
+      <select id="importHistoryStatus">
+        <option value="">全部状态</option>
+        <option value="ok">成功</option>
+        <option value="partial">部分失败</option>
+        <option value="failed">失败</option>
+        <option value="skipped">跳过</option>
+        <option value="pending">待导入</option>
+      </select>
+      <button class="btn" id="importHistoryRefresh">刷新</button>
+      <button class="btn" id="importHistoryClear">清空记录</button>
+    </div>
+    <div class="hint" id="importHistorySummary" style="margin:-4px 0 10px"></div>
+    <div class="browser-list">
+      <table class="pkgs">
+        <thead><tr><th>包名</th><th>版本</th><th>最后状态</th><th>目标</th><th>最后导入时间</th><th>次数</th></tr></thead>
+        <tbody id="importHistoryBody"></tbody>
+      </table>
+    </div>
+    <div class="modal-btns">
+      <button class="btn-ghost" id="importHistoryClose">关闭</button>
+    </div>
+  </div>
+</div>
+
 <!-- 上游服务器弹窗 -->
 <div id="uplinkOverlay" class="overlay hidden">
   <div class="modal wide">
@@ -444,9 +508,10 @@ const COMMANDS = [
       { id: 'migrate-packages',   icon: '🚚', name: '迁移包到其他 Registry', desc: '把本地已发布的包(全部 / 指定)推送到另一台 npm 服务器', migrate: true, danger: true, confirm: 'MIGRATE', warn: '将把所选包的全部版本逐个发布到目标 Registry。\n源 Verdaccio 无需停止:只读取存储,不修改本地数据。\n目标上已存在的同名同版本会自动跳过,可重复执行。\n注意:版本的更新时间无法保留,目标上显示的是迁移时间。' },
       { id: 'export-packages',    icon: '📤', name: '导出包(离线迁移)', desc: '把包导出为文件夹 / zip,带到无法直连的内网', export: true, warn: '只读取本机存储,不修改任何数据。\n导出内容包含 tarball、校验清单(manifest.json)、\n导入脚本与使用说明,可用 U 盘等介质带入内网。' },
       { id: 'import-packages',    icon: '📥', name: '导入包(离线迁移)', desc: '把导出的包导入内网 Registry 或 Verdaccio 存储', import: true, danger: true, confirm: 'IMPORT', warn: '将把迁移包中的包导入目标。\n发布模式:逐版本 npm publish,目标已有版本自动跳过。\n存储模式:直接复制进 storage 并写入 DB 列表,\n保留原发布时间,需要先停止目标 Verdaccio。\n每个 tarball 先按校验和核对,拷贝损坏会被拦截。' },
+      { id: 'import-history',     icon: '🗂️', name: '导入包列表', desc: '查看所有通过离线迁移导入的包、版本与结果', importHistory: true },
       { id: 'clean-cache',        icon: '🧽', name: '清空缓存包', desc: '删除全部上游缓存,本地发布的包保留', danger: true, confirm: 'CLEAN CACHE', warn: '将删除所有从上游(如 npmmirror)缓存下来的包,\n本地发布的包(DB 列表)全部保留。\nDB 列表与 secret 不会修改。\n需要先停止 Verdaccio。' },
       { id: 'remove-package',     icon: '🗑️', name: '删除指定包', desc: '从存储与 DB 中删除单个包', danger: true, confirm: 'DELETE', param: 'package', warn: '将删除该包的全部版本与存储文件。\n执行前会自动备份 DB,需要先停止 Verdaccio。' },
-      { id: 'remove-package-list', icon: '📋', name: '按列表删除包', desc: '读取包列表文件(JSON / 文本),批量删除其中的包', danger: true, confirm: 'DELETE LIST', listFile: true, warn: '将删除列表中【所有包】的存储与 DB 记录(整个包,含全部版本)。\nname@version 条目也按整个包删除。\n执行前自动备份 DB,需要先停止 Verdaccio。\n弹窗会预览将删除的包列表,请核对后再确认。' },
+      { id: 'remove-package-list', icon: '📋', name: '按列表删除包', desc: '读取包列表文件(JSON / 文本),批量删除本机或远程 Registry 中的包', danger: true, confirm: 'DELETE LIST', listFile: true, warn: '将删除列表中【所有包】(整个包,含全部版本)。\n默认删除本机 Verdaccio storage:执行前自动备份 DB,需要先停止 Verdaccio。\n填写目标 Registry URL 时改为远程删除(npm unpublish),\n需要有该 Registry 的删除权限。\nname@version 条目也按整个包删除。\n弹窗会预览将删除的包列表,请核对后再确认。' },
       { id: 'remove-scope',       icon: '🧨', name: '删除 Scope 全部包', desc: '删除同一 scope 下的所有包,如 @szewtwin', danger: true, confirm: 'DELETE', param: 'scope', warn: '将删除该 scope 下【所有包】的存储与 DB 记录。\nsecret 保留,执行前自动备份 DB。\n需要先停止 Verdaccio。' },
       { id: 'remove-all-packages', icon: '💣', name: '删除全部包', desc: '清空所有包存储与 DB 列表(secret 保留)', danger: true, confirm: 'DELETE ALL', warn: '将删除 Verdaccio 上【所有包】的全部存储!\nsecret 会保留,执行前自动备份 DB。\n需要先停止 Verdaccio。' },
     ],
@@ -495,6 +560,7 @@ function render() {
         c.browser ? openBrowser()
         : c.remote ? openRemote()
         : c.uplinks ? openUplinks()
+        : c.importHistory ? openImportHistory()
         : openModal(c));
       cards.appendChild(btn);
     }
@@ -581,6 +647,109 @@ function updateScopePreview() {
   $('#scopePreview').textContent = list.length
     ? list.join('\n')
     : '(该 scope 下没有包)';
+}
+
+// PowerShell 的 ConvertTo-Json 会把单元素数组写成标量,统一还原为数组
+function asArray(v) {
+  if (v == null || v === '') return [];
+  return Array.isArray(v) ? v : [v];
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+const IMPORT_STATUS_LABEL = {
+  pending: '待导入',
+  ok: '成功',
+  partial: '部分失败',
+  failed: '失败',
+  skipped: '跳过',
+};
+
+// 供导入弹窗展示最近几次导入的包与结果
+function formatImportHistory(records) {
+  const list = asArray(records);
+  if (!list.length) return '暂无导入记录;成功执行一次导入后会显示在这里。';
+
+  const lines = [];
+  for (const rec of list.slice(0, 5)) {
+    const when = rec.at ? new Date(rec.at).toLocaleString() : '-';
+    const rows = asArray(rec.rows);
+    const counts = { ok: 0, partial: 0, failed: 0, skipped: 0, pending: 0 };
+    for (const r of rows) {
+      if (counts[r.status] !== undefined) counts[r.status]++;
+    }
+    const parts = [];
+    for (const k of ['ok', 'partial', 'failed', 'skipped', 'pending']) {
+      if (counts[k]) parts.push(IMPORT_STATUS_LABEL[k] + ' ' + counts[k]);
+    }
+
+    lines.push(
+      `${when}  ·  ${rec.target || '-'}  ·  ${parts.join(' / ') || '无结果'}` +
+        (rec.completed ? '' : '  (未完成)')
+    );
+    for (const r of rows) {
+      const vers = asArray(r.versions).map(String);
+      const detail =
+        (r.status === 'failed' || r.status === 'partial') && r.detail
+          ? `  (${r.detail})`
+          : '';
+      lines.push(
+        `  ${r.name}  [${vers.join(', ')}]  ` +
+          (IMPORT_STATUS_LABEL[r.status] || r.status) +
+          detail
+      );
+    }
+    lines.push('');
+  }
+  if (list.length > 5) lines.push(`仅显示最近 5 次,共 ${list.length} 次导入记录`);
+  return lines.join('\n');
+}
+
+async function loadImportHistoryInto(el) {
+  if (!el) return;
+  try {
+    const r = await fetch('/api/import-history');
+    // 旧版控制台服务没有该接口:按「无记录」展示,并提示重启
+    if (r.status === 404) {
+      el.textContent = '暂无导入记录(控制台服务版本较旧,请重启后再试)';
+      return;
+    }
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+    el.textContent = formatImportHistory(d.records || []);
+  } catch (e) {
+    el.textContent = '导入记录读取失败: ' + e.message;
+  }
+}
+
+function formatBundlePreview(d) {
+  const lines = [];
+  const bundles = asArray(d.bundles);
+  bundles.forEach((b, i) => {
+    const pkgs = asArray(b && b.packages);
+    lines.push(`迁移包 ${i + 1}: ${(b && b.path) || ''}`);
+    lines.push(`  ${(b && b.created) || '-'}  ·  ${pkgs.length} 个包`);
+    for (const p of pkgs) {
+      const vers = asArray(p.versions).map(String);
+      const miss = asArray(p.missingTarballs).length;
+      lines.push(
+        `  ${p.name}  [${vers.join(', ') || '无本地 tarball'}]` +
+          (miss ? `  (${miss} 个版本缺 tarball)` : '')
+      );
+    }
+    lines.push('');
+  });
+  lines.push(
+    `合计: ${d.totalBundles ?? bundles.length} 个迁移包 / ` +
+      `${d.totalPackages ?? 0} 个包 / ${d.totalVersions ?? 0} 个版本`
+  );
+  return lines.join('\n');
 }
 
 function openModal(cmd, preset = {}) {
@@ -701,10 +870,29 @@ function openModal(cmd, preset = {}) {
     </div>`;
   }
   if (cmd.import) {
-    fields += field('迁移包路径(导出的目录或 zip)', `
-      id="f-bundle" placeholder="D:\\mig-bundle 或 D:\\mig-bundle.zip"
-      autocomplete="off" spellcheck="false"`,
-      'export-packages.ps1 的产物,含 manifest.json 的目录或 zip');
+    const savedBundles = localStorage.getItem('verdaccio-import-bundles') || '';
+    const savedReg =
+      localStorage.getItem('verdaccio-import-registry') ||
+      localStorage.getItem('verdaccio-migrate-registry') ||
+      '';
+    const savedStorage = localStorage.getItem('verdaccio-import-storage') || '';
+
+    fields += `<div class="field">
+      <label>迁移包路径(导出的目录或 zip,可填多个)</label>
+      <textarea id="f-bundle" rows="3"
+        placeholder="D:\\mig-bundle&#10;D:\\mig-bundle.zip&#10;每行一个;也可填包含多个迁移包的上级目录"
+        autocomplete="off" spellcheck="false">${escAttr(savedBundles)}</textarea>
+      <div class="hint">每行一个路径;填上级目录(如 package-export)会批量导入其中所有迁移包,目录与同名 zip 自动去重</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+        <button type="button" class="btn" id="f-bundle-preview-btn">查看包列表</button>
+        <span class="hint" id="f-bundle-preview-hint" style="margin:0">读取迁移包中的包与版本(不解压 zip)</span>
+      </div>
+      <div class="scope-preview hidden" id="bundlePreview"></div>
+    </div>`;
+    fields += `<details style="margin-bottom:13px">
+      <summary style="cursor:pointer;font-size:12.5px;color:var(--muted)">查看导入记录(最近 5 次)</summary>
+      <div class="scope-preview" id="importHistory" style="max-height:220px;margin-top:8px">读取中…</div>
+    </details>`;
     fields += `<div class="field">
       <label>导入方式</label>
       <select id="f-import-mode">
@@ -714,13 +902,13 @@ function openModal(cmd, preset = {}) {
     </div>
     <div class="field" id="f-import-registry-field">
       <label>目标 Registry URL</label>
-      <input id="f-registry" placeholder="http://192.168.1.10:4873"
+      <input id="f-registry" value="${escAttr(savedReg)}" placeholder="http://192.168.1.10:4873"
         autocomplete="off" spellcheck="false">
       <div class="hint">逐版本 npm publish,目标已有的同名同版本自动跳过</div>
     </div>
     <div class="field hidden" id="f-import-storage-field">
       <label>目标 Verdaccio storage 目录</label>
-      <input id="f-storage" placeholder="D:\\verdaccio\\storage"
+      <input id="f-storage" value="${escAttr(savedStorage)}" placeholder="D:\\verdaccio\\storage"
         autocomplete="off" spellcheck="false">
       <div class="hint">直接复制并写入 DB 列表(保留发布时间);执行前自动备份目标 DB,需先停止目标 Verdaccio</div>
     </div>`;
@@ -736,6 +924,7 @@ function openModal(cmd, preset = {}) {
   }
   if (cmd.listFile) {
     const saved = localStorage.getItem('verdaccio-list-file') || '';
+    const savedReg = localStorage.getItem('verdaccio-remove-list-registry') || '';
     fields += field('包列表文件(JSON / 文本)', `
       id="f-listfile" value="${escAttr(saved)}" placeholder="D:\\pkg-list.json"
       autocomplete="off" spellcheck="false"`,
@@ -743,8 +932,18 @@ function openModal(cmd, preset = {}) {
     fields += `<div class="field">
       <label>将删除以下包:</label>
       <div class="scope-preview" id="listPreview">输入文件路径后自动读取预览</div>
-    </div>
-    <div class="field">
+    </div>`;
+    fields += field('目标 Registry URL(可选)', `
+      id="f-remove-registry" value="${escAttr(savedReg)}"
+      placeholder="留空 = 删除本机 Verdaccio storage"
+      autocomplete="off" spellcheck="false"`,
+      '填写后从该远程 Registry 删除(npm unpublish,需要 npm 与删除权限);留空则删除本机 Verdaccio storage');
+    fields += `<div class="field hidden" id="f-remove-token-field">
+      <label>认证 Token(远程删除)</label>
+      <input id="f-remove-token" type="password" autocomplete="off">
+      <div class="hint">目标 Registry 的 npm token;留空则使用本机 npm 对该 Registry 的登录状态</div>
+    </div>`;
+    fields += `<div class="field">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
         <input type="checkbox" id="f-dryrun" style="width:auto;margin:0">
         仅预览(DryRun),不实际删除
@@ -799,6 +998,18 @@ function openModal(cmd, preset = {}) {
     syncMode();
   }
   if (cmd.import) {
+    // 记住上一次输入:路径 / 目标 URL / storage / 导入方式
+    if (localStorage.getItem('verdaccio-import-mode') === 'storage') {
+      $('#f-import-mode').value = 'storage';
+    }
+    const persist = (key, el, evt) => {
+      el.addEventListener(evt, () => localStorage.setItem(key, el.value));
+    };
+    persist('verdaccio-import-bundles', $('#f-bundle'), 'input');
+    persist('verdaccio-import-registry', $('#f-registry'), 'input');
+    persist('verdaccio-import-storage', $('#f-storage'), 'input');
+    persist('verdaccio-import-mode', $('#f-import-mode'), 'change');
+
     const modeSel = $('#f-import-mode');
     const syncMode = () => {
       const m = modeSel.value;
@@ -807,6 +1018,42 @@ function openModal(cmd, preset = {}) {
     };
     modeSel.addEventListener('change', syncMode);
     syncMode();
+
+    loadImportHistoryInto($('#importHistory'));
+
+    // 读取迁移包内容(仅读 manifest.json,zip 不解压)
+    const previewBtn = $('#f-bundle-preview-btn');
+    const previewBox = $('#bundlePreview');
+    previewBtn.addEventListener('click', async () => {
+      const bundles = $('#f-bundle').value
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (!bundles.length) { $('#f-bundle').focus(); return; }
+
+      previewBtn.disabled = true;
+      previewBox.classList.remove('hidden');
+      previewBox.textContent = '读取中…';
+      try {
+        const r = await fetch('/api/import-preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bundles: bundles.join('\n') }),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          previewBox.textContent =
+            '✖ ' + (d.error || 'HTTP ' + r.status) +
+            (d.detail ? '\n\n' + d.detail : '');
+          return;
+        }
+        previewBox.textContent = formatBundlePreview(d);
+      } catch (e) {
+        previewBox.textContent = '✖ 预览失败: ' + e.message;
+      } finally {
+        previewBtn.disabled = false;
+      }
+    });
   }
   if (cmd.listFile) {
     const input = $('#f-listfile');
@@ -841,10 +1088,20 @@ function openModal(cmd, preset = {}) {
       timer = setTimeout(loadListPreview, 400);
     });
     if (input.value.trim()) loadListPreview();
+
+    // 目标 Registry 留空 = 本机删除;填写后显示 token 输入并记住 URL
+    const regInput = $('#f-remove-registry');
+    const tokenField = $('#f-remove-token-field');
+    const syncRemote = () => tokenField.classList.toggle('hidden', !regInput.value.trim());
+    regInput.addEventListener('input', () => {
+      localStorage.setItem('verdaccio-remove-list-registry', regInput.value);
+      syncRemote();
+    });
+    syncRemote();
   }
 
   $('#overlay').classList.remove('hidden');
-  const first = $('#modalFields input');
+  const first = $('#modalFields input, #modalFields textarea');
   if (first) first.focus();
 }
 
@@ -866,12 +1123,16 @@ $('#uplinkOverlay').addEventListener('click', (e) => {
 $('#remoteOverlay').addEventListener('click', (e) => {
   if (e.target === $('#remoteOverlay')) closeRemote();
 });
+$('#importHistoryOverlay').addEventListener('click', (e) => {
+  if (e.target === $('#importHistoryOverlay')) closeImportHistory();
+});
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!$('#overlay').classList.contains('hidden')) closeModal();
   else if (!$('#browserOverlay').classList.contains('hidden')) closeBrowser();
   else if (!$('#uplinkOverlay').classList.contains('hidden')) closeUplinks();
   else if (!$('#remoteOverlay').classList.contains('hidden')) closeRemote();
+  else if (!$('#importHistoryOverlay').classList.contains('hidden')) closeImportHistory();
 });
 
 $('#modalRun').addEventListener('click', () => {
@@ -927,20 +1188,27 @@ $('#modalRun').addEventListener('click', () => {
     if ($('#f-zip').checked) payload.zip = true;
   }
   if (cmd.import) {
-    const bundle = $('#f-bundle').value.trim();
-    if (!bundle) { $('#f-bundle').focus(); return; }
-    payload.bundle = bundle;
+    const bundles = $('#f-bundle').value
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!bundles.length) { $('#f-bundle').focus(); return; }
+    payload.bundle = bundles.join('\n');
+    localStorage.setItem('verdaccio-import-bundles', payload.bundle);
 
     const mode = $('#f-import-mode').value;
+    payload.mode = mode;
+    localStorage.setItem('verdaccio-import-mode', mode);
     if (mode === 'registry') {
       const reg = $('#f-registry').value.trim();
       if (!/^https?:\/\//i.test(reg)) { $('#f-registry').focus(); return; }
       payload.registry = reg;
-      localStorage.setItem('verdaccio-migrate-registry', reg);
+      localStorage.setItem('verdaccio-import-registry', reg);
     } else {
       const st = $('#f-storage').value.trim();
       if (!st) { $('#f-storage').focus(); return; }
       payload.storage = st;
+      localStorage.setItem('verdaccio-import-storage', st);
     }
     if ($('#f-dryrun').checked) payload.dryRun = true;
 
@@ -955,9 +1223,21 @@ $('#modalRun').addEventListener('click', () => {
     if (!f) { $('#f-listfile').focus(); return; }
     payload.listfile = f;
     localStorage.setItem('verdaccio-list-file', f);
+
+    const reg = $('#f-remove-registry').value.trim();
+    if (reg) {
+      if (!/^https?:\/\//i.test(reg)) { $('#f-remove-registry').focus(); return; }
+      payload.registry = reg;
+      localStorage.setItem('verdaccio-remove-list-registry', reg);
+    }
     if ($('#f-dryrun').checked) payload.dryRun = true;
+
+    // stdin 协议:本地模式只有确认词;远程模式第 1 行 token,第 2 行确认词
+    payload.stdin = reg
+      ? [$('#f-remove-token').value, $('#f-confirm').value.trim()].join('\n')
+      : $('#f-confirm').value.trim();
   }
-  if (!cmd.migrate && !cmd.export && !cmd.import) {
+  if (!cmd.migrate && !cmd.export && !cmd.import && !cmd.listFile) {
     if (cmd.confirm) {
       payload.stdin = $('#f-confirm').value.trim();
     }
@@ -989,12 +1269,137 @@ function createLog(cmd) {
       <span class="spacer"></span>
       <span class="badge running">运行中</span>
     </div>
+    <div class="import-result hidden"></div>
     <pre></pre>`;
   const logs = $('#logs');
   logs.appendChild(log);
   logs.scrollTop = logs.scrollHeight;
+
+  const pre = log.querySelector('pre');
+  const resultEl = log.querySelector('.import-result');
+  let outBuf = '';
+  let importRows = [];
+  let importDone = null;
+
+  const statusLabel = IMPORT_STATUS_LABEL;
+  const scrollDown = () => { logs.scrollTop = logs.scrollHeight; };
+
+  // 结构化行可能一次涌入很多,合并到下一帧再渲染
+  let renderTimer = null;
+  function scheduleRender() {
+    if (renderTimer) return;
+    renderTimer = setTimeout(() => {
+      renderTimer = null;
+      renderResult();
+    }, 50);
+  }
+
+  function addPlan(obj) {
+    importRows.push({
+      name: String(obj.name || ''),
+      versions: asArray(obj.versions).map(String),
+      status: 'pending',
+      detail: '',
+    });
+    scheduleRender();
+  }
+
+  function updatePkg(obj) {
+    const name = String(obj.name || '');
+    // 同名包可能来自多个迁移包:更新第一个仍处于「待导入」的记录
+    let row = importRows.find((r) => r.name === name && r.status === 'pending');
+    if (!row) {
+      row = { name, versions: [], status: 'pending', detail: '' };
+      importRows.push(row);
+    }
+    const vers = asArray(obj.versions).map(String);
+    if (vers.length) row.versions = vers;
+    row.status = statusLabel[obj.status] ? obj.status : 'ok';
+    row.detail = String(obj.detail || '');
+    scheduleRender();
+  }
+
+  function renderResult() {
+    if (!importRows.length && !importDone) return;
+    resultEl.classList.remove('hidden');
+    resultEl.textContent = '';
+
+    const counts = { ok: 0, partial: 0, failed: 0, skipped: 0, pending: 0 };
+    for (const r of importRows) {
+      if (counts[r.status] !== undefined) counts[r.status]++;
+    }
+
+    const head = document.createElement('div');
+    head.className = 'ir-head';
+    const title = document.createElement('b');
+    title.textContent = '导入结果';
+    head.appendChild(title);
+
+    if (importDone) {
+      const d = document.createElement('span');
+      d.textContent =
+        importDone.mode === 'storage'
+          ? `新包 ${importDone.copied ?? 0} / 合并 ${importDone.merged ?? 0} / ` +
+            `已完整 ${importDone.skipped ?? 0} / 失败 ${importDone.failed ?? 0}`
+          : `发布 ${importDone.published ?? 0} 个版本 / ` +
+            `已存在 ${importDone.skipped ?? 0} / 失败 ${importDone.failed ?? 0}` +
+            (importDone.tagsFailed ? ` / tag 失败 ${importDone.tagsFailed}` : '');
+      head.appendChild(d);
+    }
+
+    const parts = [];
+    for (const k of ['ok', 'partial', 'failed', 'skipped', 'pending']) {
+      if (counts[k]) parts.push(statusLabel[k] + ' ' + counts[k]);
+    }
+    const sum = document.createElement('span');
+    sum.textContent = parts.join(' / ');
+    head.appendChild(sum);
+    resultEl.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'ir-body';
+    for (const r of importRows) {
+      const row = document.createElement('div');
+      row.className = 'ir-row';
+
+      const name = document.createElement('span');
+      name.className = 'ir-name';
+      name.textContent = r.name;
+      name.title = r.name;
+
+      const ver = document.createElement('span');
+      ver.className = 'ir-ver';
+      ver.textContent = r.versions.join(', ');
+
+      const badge = document.createElement('span');
+      badge.className = 'ir-status ' + r.status;
+      badge.textContent = statusLabel[r.status] || r.status;
+      if (r.detail) badge.title = r.detail;
+
+      row.append(name, ver, badge);
+      body.appendChild(row);
+    }
+    resultEl.appendChild(body);
+  }
+
+  // 解析 @@IMPORT_PLAN/PKG/DONE@@ 结构化行;其余内容原样写入终端
+  function consumeLine(line) {
+    const m = line.replace(/\r?\n$/, '').match(/^@@IMPORT_(PLAN|PKG|DONE)@@(.+)$/);
+    if (m) {
+      try {
+        const data = JSON.parse(m[2]);
+        if (m[1] === 'PLAN') addPlan(data);
+        else if (m[1] === 'PKG') updatePkg(data);
+        else { importDone = data; scheduleRender(); }
+      } catch {}
+      return;
+    }
+    pre.appendChild(document.createTextNode(line));
+    scrollDown();
+  }
+
   return {
-    pre: log.querySelector('pre'),
+    pre,
     badge: log.querySelector('.badge'),
     append(text, isErr) {
       if (isErr) {
@@ -1005,7 +1410,26 @@ function createLog(cmd) {
       } else {
         this.pre.appendChild(document.createTextNode(text));
       }
-      logs.scrollTop = logs.scrollHeight;
+      scrollDown();
+    },
+    // 导入命令按行缓冲,避免结构化行被 stdout 分块截断
+    appendOut(text) {
+      if (cmd.id !== 'import-packages') {
+        this.append(text, false);
+        return;
+      }
+      outBuf += text;
+      let idx;
+      while ((idx = outBuf.indexOf('\n')) >= 0) {
+        consumeLine(outBuf.slice(0, idx + 1));
+        outBuf = outBuf.slice(idx + 1);
+      }
+    },
+    flushOut() {
+      if (outBuf) {
+        consumeLine(outBuf);
+        outBuf = '';
+      }
     },
     finish(code) {
       this.badge.classList.remove('running');
@@ -1016,7 +1440,7 @@ function createLog(cmd) {
         this.badge.classList.add('fail');
         this.badge.textContent = '✗ 失败 (exit ' + code + ')';
       }
-      logs.scrollTop = logs.scrollHeight;
+      scrollDown();
     },
   };
 }
@@ -1073,9 +1497,10 @@ function runCommand(cmd, payload) {
 }
 
 function handleEvent(ev, log, done) {
-  if (ev.type === 'out') log.append(ev.text, false);
+  if (ev.type === 'out') log.appendOut(ev.text);
   else if (ev.type === 'err') log.append(ev.text, true);
   else if (ev.type === 'exit') {
+    log.flushOut();
     log.finish(ev.code === 'killed' ? 'killed' : ev.code);
     setRunning(false);
     refreshStatus();
@@ -1108,6 +1533,140 @@ async function openBrowser() {
 
 function closeBrowser() {
   $('#browserOverlay').classList.add('hidden');
+}
+
+// ---------------------------------------------------------------------------
+// 导入包列表 —— 聚合服务端保存的全部导入记录
+// ---------------------------------------------------------------------------
+let importHistoryRecords = [];
+
+async function openImportHistory() {
+  if (running) return;
+  $('#importHistoryOverlay').classList.remove('hidden');
+  await loadImportHistoryView();
+}
+
+function closeImportHistory() {
+  $('#importHistoryOverlay').classList.add('hidden');
+}
+
+async function loadImportHistoryView() {
+  $('#importHistoryBody').innerHTML =
+    '<tr><td colspan="6" style="color:#5a6a7d;padding:14px">加载中…</td></tr>';
+  try {
+    const r = await fetch('/api/import-history');
+    // 旧版控制台服务没有该接口:按「无记录」展示,并提示重启
+    if (r.status === 404) {
+      importHistoryRecords = [];
+      renderImportHistoryView();
+      $('#importHistorySummary').textContent =
+        '暂无导入记录(控制台服务版本较旧,请重启后再试)';
+      return;
+    }
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+    importHistoryRecords = Array.isArray(d.records) ? d.records : [];
+    renderImportHistoryView();
+  } catch (e) {
+    $('#importHistoryBody').innerHTML =
+      '<tr><td colspan="6" style="color:#ff8b84;padding:14px">读取失败: ' +
+      escHtml(e.message) +
+      '</td></tr>';
+  }
+}
+
+// 按包名聚合多次导入:版本取并集,状态/目标/时间取该包最近一次导入
+function aggregateImportHistory() {
+  const map = new Map();
+  for (const rec of importHistoryRecords) {
+    for (const row of asArray(rec.rows)) {
+      const name = String(row.name || '');
+      if (!name) continue;
+
+      let a = map.get(name);
+      if (!a) {
+        a = {
+          name,
+          versions: new Set(),
+          count: 0,
+          lastAt: '',
+          lastStatus: 'pending',
+          lastDetail: '',
+          lastTarget: '',
+        };
+        map.set(name, a);
+      }
+      a.count++;
+      for (const v of asArray(row.versions)) a.versions.add(String(v));
+
+      const at = String(rec.at || '');
+      if (!a.lastAt || at > a.lastAt) {
+        a.lastAt = at;
+        a.lastStatus = String(row.status || 'pending');
+        a.lastDetail = String(row.detail || '');
+        a.lastTarget = String(rec.target || '');
+      }
+    }
+  }
+  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function renderImportHistoryView() {
+  const q = ($('#importHistorySearch').value || '').trim().toLowerCase();
+  const status = $('#importHistoryStatus').value;
+  const agg = aggregateImportHistory();
+
+  const rows = agg.filter((a) => {
+    if (q && !a.name.toLowerCase().includes(q) &&
+        !a.lastTarget.toLowerCase().includes(q)) {
+      return false;
+    }
+    if (status && a.lastStatus !== status) return false;
+    return true;
+  });
+
+  const counts = {};
+  for (const a of agg) counts[a.lastStatus] = (counts[a.lastStatus] || 0) + 1;
+  const parts = [];
+  for (const k of ['ok', 'partial', 'failed', 'skipped', 'pending']) {
+    if (counts[k]) parts.push(IMPORT_STATUS_LABEL[k] + ' ' + counts[k]);
+  }
+
+  $('#importHistoryCount').textContent =
+    '共 ' + agg.length + ' 个包 / ' + importHistoryRecords.length + ' 次导入';
+  $('#importHistorySummary').textContent =
+    (parts.length ? '最新状态: ' + parts.join(' / ') : '') +
+    (agg.length ? ' · 显示 ' + rows.length + ' 个包' : '');
+
+  if (!rows.length) {
+    $('#importHistoryBody').innerHTML =
+      '<tr><td colspan="6" style="color:#5a6a7d;padding:14px">' +
+      (agg.length
+        ? '没有匹配的包'
+        : '暂无导入记录;通过 Web 控制台执行一次导入后会自动记录') +
+      '</td></tr>';
+    return;
+  }
+
+  $('#importHistoryBody').innerHTML = rows.map((a) => {
+    const vers = [...a.versions].join(', ');
+    const when = a.lastAt
+      ? new Date(a.lastAt).toLocaleString('zh-CN', { hour12: false })
+      : '-';
+    const label = IMPORT_STATUS_LABEL[a.lastStatus] || a.lastStatus;
+    const title =
+      (a.lastStatus === 'failed' || a.lastStatus === 'partial') && a.lastDetail
+        ? ` title="${escHtml(a.lastDetail)}"`
+        : '';
+    return `<tr>
+      <td class="pkg-name">${escHtml(a.name)}</td>
+      <td class="pkg-ver">${escHtml(vers || '-')}</td>
+      <td><span class="ir-status ${escHtml(a.lastStatus)}"${title}>${escHtml(label)}</span></td>
+      <td class="pkg-time">${escHtml(a.lastTarget || '-')}</td>
+      <td class="pkg-time">${when}</td>
+      <td class="pkg-time">${a.count}</td>
+    </tr>`;
+  }).join('');
 }
 
 async function loadBrowser() {
@@ -1207,6 +1766,27 @@ $('#browserExportNames').addEventListener('click', () =>
   exportPackages($('#browserExportWithVersion').checked ? 'specs' : 'names')
 );
 $('#browserClose').addEventListener('click', closeBrowser);
+
+$('#importHistorySearch').addEventListener('input', renderImportHistoryView);
+$('#importHistoryStatus').addEventListener('change', renderImportHistoryView);
+$('#importHistoryRefresh').addEventListener('click', loadImportHistoryView);
+$('#importHistoryClose').addEventListener('click', closeImportHistory);
+$('#importHistoryClear').addEventListener('click', async () => {
+  if (!confirm('确认清空所有导入记录?只删除记录,不影响已导入的包。')) return;
+  try {
+    const r = await fetch('/api/import-history/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+    importHistoryRecords = [];
+    renderImportHistoryView();
+  } catch (e) {
+    alert('清空失败: ' + e.message);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // 上游服务器 uplinks 管理

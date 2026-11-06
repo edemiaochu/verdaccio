@@ -536,6 +536,13 @@ Verdaccio 离线迁移包(由 export-packages.ps1 生成)
 
 解压 / 拷贝本目录后,在目录内执行以下任一方式。
 
+批量导入多个迁移包:
+  -Bundle 可用 "|" 或换行分隔多个路径,也可以直接指向包含多个
+  迁移包的上级目录(如 package-export),脚本会自动发现子目录与 zip,
+  一次校验、一次确认后全部导入;目录与同名 zip 只导入目录。
+  例: -Bundle "D:\mig-a.zip|D:\mig-b.zip"
+       -Bundle D:\package-export
+
 【方式 A】发布到内网 npm Registry(通用,需要 npm):
   powershell -ExecutionPolicy Bypass -File .\import-packages.ps1 -Bundle . -Registry http://<内网服务器>:4873
 
